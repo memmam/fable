@@ -79,7 +79,8 @@ There are **no implicit numeric conversions**. `1 + 2.0` is a type error; write
 
 - `List[T]` — growable array. **Reference semantics** (aliases see mutation).
 - `Map[K, V]` — hash map. Reference semantics. Keys are compared/hashed structurally;
-  using a value containing a function as a key panics at runtime.
+  function-containing key types are rejected at compile time (E0312) when concrete,
+  and panic at runtime when reached through a generic type parameter.
 - `(T1, T2, ...)` — tuple, 2 or more elements. **Immutable, value semantics.**
   Accessed by pattern matching or `.0`, `.1`, ... index syntax.
 - `fn(T1, T2) -> R` — function type.
@@ -349,8 +350,9 @@ Method calls are type-directed (resolved at compile time from the receiver's typ
 `get(Int) -> Option[T]`, `first() -> Option[T]`, `last() -> Option[T]`,
 `contains(T) -> Bool`, `index_of(T) -> Option[Int]`,
 `reverse() -> List[T]` (returns new), `reversed` alias — **no**, only `reverse`,
-`sort() -> List[T]` (returns new sorted; element type must be Int/Float/String at
-runtime, else panic), `sort_by(fn(T, T) -> Int) -> List[T]` (comparator returns
+`sort() -> List[T]` (returns a new sorted list; elements must be Int/Float/String —
+a concrete violation is a compile error E0322, and a violation reached through a
+generic type parameter panics at runtime), `sort_by(fn(T, T) -> Int) -> List[T]` (comparator returns
 negative/zero/positive), `map[U](fn(T) -> U) -> List[U]`,
 `filter(fn(T) -> Bool) -> List[T]`, `each(fn(T) -> Unit) -> Unit`,
 `fold[A](A, fn(A, T) -> A) -> A`, `any(fn(T) -> Bool) -> Bool`,
