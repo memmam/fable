@@ -1,6 +1,5 @@
 // SPEC 1.2: identifiers match [A-Za-z_][A-Za-z0-9_]*. Keywords are reserved,
-// but identifiers that merely start with (or contain) a keyword are fine —
-// including the reserved words `and`, `or`, `not` as prefixes.
+// but identifiers that merely start with (or contain) a keyword are fine.
 let android = 1;
 let orchid = 2;
 let nothing = 3;

@@ -38,10 +38,14 @@ impl VmError {
         };
         out.push_str(&format!("{red}panic:{reset} {bold}{}{reset}\n", self.msg));
         for t in &self.trace {
-            out.push_str(&format!(
-                "  at {} ({}:{}:{})\n",
-                t.fn_name, t.source_name, t.line, t.col
-            ));
+            if t.source_name.is_empty() {
+                out.push_str(&format!("  at {}\n", t.fn_name));
+            } else {
+                out.push_str(&format!(
+                    "  at {} ({}:{}:{})\n",
+                    t.fn_name, t.source_name, t.line, t.col
+                ));
+            }
         }
         out
     }

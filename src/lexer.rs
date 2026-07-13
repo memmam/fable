@@ -269,19 +269,6 @@ impl<'a> Lexer<'a> {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "_" => TokenKind::Underscore,
-            "and" | "or" | "not" => {
-                let hint = match word {
-                    "and" => "`&&`",
-                    "or" => "`||`",
-                    _ => "`!`",
-                };
-                self.error_at(
-                    Span::new(start as u32, self.pos as u32),
-                    "E0106",
-                    format!("`{word}` is a reserved word; the operator is spelled {hint}"),
-                );
-                TokenKind::Ident(word.to_string())
-            }
             _ => TokenKind::Ident(word.to_string()),
         };
         self.push(kind, start, self.pos);
@@ -672,6 +659,12 @@ mod tests {
     fn errors_reported() {
         assert!(!lex("\"unterminated").diags.is_empty());
         assert!(!lex("@").diags.is_empty());
-        assert!(!lex("1 and 2").diags.is_empty());
+    }
+
+    #[test]
+    fn and_or_not_are_identifiers() {
+        // The words are legal identifiers; the parser gives targeted hints
+        // when they appear in operator position.
+        assert_eq!(kinds("or"), vec![Ident("or".into()), Eof]);
     }
 }

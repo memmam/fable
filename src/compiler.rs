@@ -1274,9 +1274,11 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::Pop, span);
             }
             PatternKind::Or(alts) => {
+                let entry_depth = self.depth(); // value under test on top
                 let mut success_jumps = Vec::new();
                 for (i, alt) in alts.iter().enumerate() {
                     let last = i + 1 == alts.len();
+                    self.set_depth(entry_depth);
                     if last {
                         self.pattern_test(alt, temps, fails);
                         // Success falls through with the value consumed.
@@ -1287,23 +1289,28 @@ impl<'a> Compiler<'a> {
                         // Matched via the dup: the original is still on top.
                         self.emit(Op::Pop, alt.span);
                         success_jumps.push(self.emit_jump(Op::Jump(0), alt.span));
-                        // Failure stubs: unwind back down to the original value
-                        // and try the next alternative.
+                        // Failure stubs: unwind back down to the original
+                        // value, then jump PAST the other stubs to the next
+                        // alternative (stubs must not fall into each other).
+                        let mut to_next_alt = Vec::new();
                         for (j, pops) in alt_fails {
                             self.patch_jump(j);
-                            self.set_depth(temps /* value */ + pops);
+                            self.set_depth(entry_depth - temps + pops);
                             let extra = pops - temps;
                             if extra > 0 {
                                 self.emit(Op::PopN(extra), alt.span);
                             }
+                            to_next_alt.push(self.emit_jump(Op::Jump(0), alt.span));
                         }
-                        self.set_depth(temps);
+                        for j in to_next_alt {
+                            self.patch_jump(j);
+                        }
                     }
                 }
                 for j in success_jumps {
                     self.patch_jump(j);
                 }
-                self.set_depth(temps - 1);
+                self.set_depth(entry_depth - 1);
             }
         }
     }

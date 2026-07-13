@@ -48,7 +48,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let Some(path) = rest.first() else {
+    let Some(path) = rest.iter().find(|a| !a.starts_with('-')) else {
         eprintln!("fable: `{cmd}` needs a file argument");
         return ExitCode::from(64);
     };

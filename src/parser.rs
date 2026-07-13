@@ -146,6 +146,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A bare identifier `and`/`or` directly after a complete expression is
+    /// never valid; give the targeted hint instead of a generic parse error.
+    fn word_operator_hint(&mut self, word: &str, op: &str) {
+        if let TokenKind::Ident(name) = self.peek() {
+            if name == word {
+                let span = self.span();
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0106",
+                        format!("`{word}` is not an operator; logical {word} is spelled `{op}`"),
+                    )
+                    .with_label(span, format!("write `{op}` here")),
+                );
+                self.advance();
+            }
+        }
+    }
+
     fn ident(&mut self, what: &str) -> PResult<Ident> {
         match self.peek().clone() {
             TokenKind::Ident(name) => {
@@ -516,6 +534,7 @@ impl<'a> Parser<'a> {
 
     fn or_expr(&mut self) -> PResult<Expr> {
         let mut lhs = self.and_expr()?;
+        self.word_operator_hint("or", "||");
         while self.at(&TokenKind::PipePipe) {
             let op_span = self.advance().span;
             let rhs = self.and_expr()?;
@@ -531,6 +550,7 @@ impl<'a> Parser<'a> {
 
     fn and_expr(&mut self) -> PResult<Expr> {
         let mut lhs = self.equality_expr()?;
+        self.word_operator_hint("and", "&&");
         while self.at(&TokenKind::AmpAmp) {
             let op_span = self.advance().span;
             let rhs = self.equality_expr()?;

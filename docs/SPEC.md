@@ -29,10 +29,12 @@ Keywords (reserved, cannot be identifiers):
 
 ```
 let mut fn struct enum match if else while for in return break continue
-true false and or not
+true false
 ```
 
-Note: `and`, `or`, `not` are reserved but the operators are spelled `&&`, `||`, `!`.
+The words `and`, `or`, and `not` are ordinary identifiers (the operators are
+spelled `&&`, `||`, `!`); using `and`/`or` in infix position gets a targeted
+error (E0106) pointing at the symbolic spelling.
 
 ### 1.3 Literals
 
@@ -223,7 +225,8 @@ match shape {
 ```
 
 - Arms are `pattern [if guard] -> expression` separated by commas (trailing comma OK).
-  An arm body may be a block: `pattern -> { stmts }`.
+  An arm body may be a block: `pattern -> { stmts }`; after a block-bodied arm the
+  comma may be omitted.
 - All arms must have the same type; `match` is an expression.
 
 **Patterns:**
@@ -234,7 +237,7 @@ match shape {
 | Wildcard           | `_`                              |
 | Binding            | `x` (binds the value)            |
 | Tuple              | `(a, b, _)`                      |
-| Enum variant       | `Some(x)`, `Shape.Rect(w, h)`, `None` |
+| Enum variant       | `Some(x)`, `Shape.Rect(w, h)`, `None` — the enum qualifier is optional whenever the scrutinee's type determines the enum |
 | Struct             | `Point { x, y }`, `Point { x: 0.0, y }` |
 | Or-pattern         | `0 \| 1 \| 2` (all alternatives must bind the same names with the same types) |
 | Guard              | `n if n > 0`                     |
@@ -284,8 +287,10 @@ expression statements        // execute in order
 - **Panics** are runtime errors that abort the program with a message and a stack
   trace: index out of bounds, missing map key via `[]`, integer overflow, integer
   division/modulo by zero, `unwrap()` on `None`/`Err`, `panic("msg")`, failed
-  `assert`/`assert_eq`, comparing functions.
-  Exit code 70. Compile errors exit with code 65; success with 0.
+  `assert`/`assert_eq`, comparing functions, reading a global before its `let`
+  has run, and call-stack overflow (the call depth is capped at 4096 frames).
+  Exit codes: success 0, usage error 64, compile error 65, unreadable input 66,
+  panic 70.
 - The runtime uses a tracing mark-and-sweep garbage collector. Setting the environment
   variable `FABLE_GC_STRESS=1` forces a collection before every allocation (testing);
   `FABLE_GC_LOG=1` logs collections to stderr.
@@ -478,7 +483,7 @@ error[E0301]: type mismatch
    |
  3 |     let x: Int = "hi";
    |            ---   ^^^^ expected `Int`, found `String`
-   |            expected due to this annotation
+   |            expected due to this
 ```
 
 Error code ranges: E01xx lexing, E02xx parsing, E03xx types, E04xx name resolution,
