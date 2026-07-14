@@ -204,8 +204,7 @@ pub fn apply(f: Value, args: List[Value]) -> Result[Value, String] {
                 return Err("arity mismatch: expected {c.params.len()} arguments, got {args.len()}");
             }
             let local = Env { vars: {:}, parent: Some(c.env) };
-            for pair in c.params.zip(args) {
-                let (name, v) = pair;
+            for (name, v) in c.params.zip(args) {
                 local.vars[name] = v;
             }
             eval(c.body, local)

@@ -11,12 +11,12 @@ fn run(src: String) -> String {
     let env = interp.global_env();
     let mut last = "#<void>";
     match reader.parse_all(src) {
-        Err(e) -> { return "parse error: {e}"; }
+        Err(e) -> return "parse error: {e}",
         Ok(forms) -> {
             for form in forms {
                 match try(|| interp.eval(form, env)) {
-                    Err(msg) -> { return "panic: {msg}"; }
-                    Ok(Err(msg)) -> { return "error: {msg}"; }
+                    Err(msg) -> return "panic: {msg}",
+                    Ok(Err(msg)) -> return "error: {msg}",
                     Ok(Ok(v)) -> { last = interp.show(v); }
                 }
             }

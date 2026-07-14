@@ -52,7 +52,7 @@ fn lex(src: String) -> Result[List[Tok], String] {
             }
             match text.parse_float() {
                 Some(v) -> toks.push(Tok.Num(v)),
-                None -> { return Err("bad number '{text}'"); }
+                None -> return Err("bad number '{text}'"),
             }
         } else if is_alpha(c) {
             // A word: `sum` is a function name, `b2` is a cell reference,

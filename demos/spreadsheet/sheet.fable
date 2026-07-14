@@ -39,10 +39,10 @@ pub fn empty() -> Sheet {
 
 // ---------------------------------------------------------------- addresses
 
-let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+let a_code = 65;    // "A".code_at(0), the start of the column alphabet
 
 fn col_name(col: Int) -> String {
-    letters.slice(col, col + 1)
+    char(a_code + col)
 }
 
 fn addr(col: Int, row: Int) -> String {
@@ -52,7 +52,10 @@ fn addr(col: Int, row: Int) -> String {
 // "B12" -> Some((1, 11)). Multi-letter columns and row 0 don't exist here,
 // so `AA1` or `B0` yield None — the evaluator turns that into #REF!.
 fn parse_addr(a: String) -> Option[(Int, Int)] {
-    let col = letters.index_of(a.slice(0, 1))?;
+    let col = a.code_at(0)? - a_code;
+    if col < 0 || col > 25 {
+        return None;
+    }
     let row = a.slice(1, a.len()).parse_int()?;
     if row < 1 {
         return None;
@@ -107,8 +110,7 @@ pub fn load(path: String) -> Result[Sheet, String] {
         if line.trim().starts_with("#") {
             continue;
         }
-        for pair in split_fields(line).enumerate() {
-            let (col, field) = pair;
+        for (col, field) in split_fields(line).enumerate() {
             if field.trim() != "" {
                 sheet.set(addr(col, row), field.trim());
             }
@@ -141,7 +143,7 @@ impl Sheet {
     // cell again means the references loop back on themselves.
     pub fn value_of(self, a: String) -> Value {
         match self.cache.get(a) {
-            Some(v) -> { return v; }
+            Some(v) -> return v,
             None -> {}
         }
         if self.busy.get(a).unwrap_or(false) {
@@ -214,14 +216,14 @@ impl Sheet {
             let vals = match arg {
                 formula.Expr.Rng(a, b) -> match span(a, b) {
                     Some(addrs) -> addrs.map(|x| self.value_of(x)),
-                    None -> { return Err(Value.Bad("#REF!")); }
+                    None -> return Err(Value.Bad("#REF!")),
                 },
                 other -> [self.eval(other)],
             };
             for v in vals {
                 match v {
                     Num(n) -> nums.push(n),
-                    Bad(code) -> { return Err(Value.Bad(code)); }
+                    Bad(code) -> return Err(Value.Bad(code)),
                     Text(_) -> {}
                     Blank -> {}
                 }
@@ -306,7 +308,7 @@ impl Sheet {
             rule.push("-".repeat(widths[c]));
         }
 
-        let lines = [trim_right(head.join(" | ")), rule.join("-+-")];
+        let lines = [head.join(" | ").trim_end(), rule.join("-+-")];
         for r in 0..self.n_rows {
             let row = [str(r + 1).pad_left(label_w, " ")];
             for c in 0..self.n_cols {
@@ -318,7 +320,7 @@ impl Sheet {
                 row.push(cell);
             }
             // Trailing spaces are trimmed so golden tests stay readable.
-            lines.push(trim_right(row.join(" | ")));
+            lines.push(row.join(" | ").trim_end());
         }
         strings.join_lines(lines)
     }
@@ -345,12 +347,4 @@ impl Sheet {
 
 fn report(a: String, raw: String, result: String) -> String {
     "  {a.pad_right(3, " ")} {raw.pad_right(22, " ")} => {result}"
-}
-
-fn trim_right(s: String) -> String {
-    let mut end = s.len();
-    while end > 0 && s.slice(end - 1, end) == " " {
-        end -= 1;
-    }
-    s.slice(0, end)
 }

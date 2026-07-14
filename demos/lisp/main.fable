@@ -25,8 +25,8 @@ fn run_source(src: String) -> Result[List[String], String] {
     let results: List[String] = [];
     for form in reader.parse_all(src)? {
         match try(|| interp.eval(form, env)) {
-            Err(msg) -> { return Err("panic: {msg}"); }
-            Ok(Err(msg)) -> { return Err(msg); }
+            Err(msg) -> return Err("panic: {msg}"),
+            Ok(Err(msg)) -> return Err(msg),
             Ok(Ok(Void)) -> {}   // definitions print nothing
             Ok(Ok(v)) -> results.push(interp.show(v)),
         }
@@ -39,7 +39,7 @@ fn show_program(name: String) -> Result[Unit, String] {
     println("");
     println(";;; {name}");
     for line in strings.lines(src) {
-        if line == "" { println(""); } else { println("    {line}"); }
+        println("    {line}".trim_end());   // blank lines stay blank, not "    "
     }
     for r in run_source(src)? {
         println("=> {r}");

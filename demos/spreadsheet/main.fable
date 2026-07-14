@@ -42,8 +42,7 @@ let paths = if os.args().is_empty() {
     os.args()
 };
 
-for pair in paths.enumerate() {
-    let (i, path) = pair;
+for (i, path) in paths.enumerate() {
     if i > 0 {
         println("");
     }

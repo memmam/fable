@@ -92,7 +92,7 @@ fn parse_form(r: Reader) -> Result[Sexp, String] {
     let items: List[Sexp] = [];
     while true {
         match r.toks.get(r.pos) {
-            None -> { return Err("missing ')'"); }
+            None -> return Err("missing ')'"),
             Some(")") -> {
                 r.pos += 1;
                 return Ok(Sexp.Form(items));
@@ -100,7 +100,6 @@ fn parse_form(r: Reader) -> Result[Sexp, String] {
             Some(_) -> items.push(parse_expr(r)?),
         }
     }
-    Err("unreachable")
 }
 
 // Anything that parses as an integer is a number; the rest are symbols.
