@@ -9,6 +9,12 @@
 //!   //? panic: <substring> — the program must panic at runtime; the panic
 //!                            message must contain <substring>.
 //!
+//! A directive must begin the line's comment: `//?` inside a string literal,
+//! or later in the text of an ordinary `//` comment, is not a directive (so
+//! prose *about* directives can't inject phantom expectations). Expected and
+//! actual lines are compared ignoring trailing whitespace — trailing spaces
+//! in a directive are invisible in an editor and can't be pinned reliably.
+//!
 //! A file with no directives must merely run to completion with no output.
 //! `expect` cannot be combined with `error`; `expect` + `panic` means the
 //! output-so-far must match before the panic.
@@ -25,10 +31,37 @@ pub struct Directives {
     pub panics: Vec<String>,
 }
 
+/// Where the line's comment starts, if that comment is a directive.
+///
+/// Scans left-to-right with just enough string-literal awareness to skip a
+/// `//` inside quotes (`"http://.."`). The first real comment decides: if it
+/// starts with `//?` it's a directive, otherwise the rest of the line is
+/// prose and cannot contain one.
+fn directive_start(line: &str) -> Option<usize> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    while i < b.len() {
+        match b[i] {
+            b'\\' if in_str => {
+                i += 2;
+                continue;
+            }
+            b'"' => in_str = !in_str,
+            b'/' if !in_str && b.get(i + 1) == Some(&b'/') => {
+                return if b.get(i + 2) == Some(&b'?') { Some(i) } else { None };
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 pub fn parse_directives(text: &str) -> Directives {
     let mut d = Directives::default();
     for line in text.lines() {
-        let Some(idx) = line.find("//?") else { continue };
+        let Some(idx) = directive_start(line) else { continue };
         let rest = line[idx + 3..].trim_start();
         if let Some(v) = rest.strip_prefix("expect:") {
             d.expect.push(v.strip_prefix(' ').unwrap_or(v).to_string());
@@ -125,7 +158,10 @@ pub fn check_one(path: &Path) -> Result<(), String> {
 fn check_stdout(expect: &[String], stdout: &str) -> Result<(), String> {
     let got: Vec<&str> = stdout.lines().collect();
     if got.len() != expect.len()
-        || !got.iter().zip(expect).all(|(g, e)| *g == e.as_str())
+        || !got
+            .iter()
+            .zip(expect)
+            .all(|(g, e)| g.trim_end() == e.trim_end())
     {
         let mut msg = String::new();
         let _ = writeln!(msg, "output mismatch");

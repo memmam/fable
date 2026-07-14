@@ -46,9 +46,15 @@ fn real_main() -> ExitCode {
         Some("run") | Some("check") | Some("dis") | Some("fmt") | Some("tokens")
         | Some("ast") => (args[0].as_str(), &args[1..]),
         Some("test") => {
+            // `fable test` takes no flags; silently swallowing `--help` (and
+            // then walking the whole cwd) helps no one.
+            if let Some(flag) = args[1..].iter().find(|a| a.starts_with('-')) {
+                eprintln!("fable test: unknown flag `{flag}`");
+                eprintln!("usage: fable test [paths...]   (files or directories; default `.`)");
+                return ExitCode::from(64);
+            }
             let paths: Vec<std::path::PathBuf> = args[1..]
                 .iter()
-                .filter(|a| !a.starts_with('-'))
                 .map(std::path::PathBuf::from)
                 .collect();
             let paths = if paths.is_empty() {

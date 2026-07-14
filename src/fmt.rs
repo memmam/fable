@@ -185,9 +185,9 @@ impl Formatter {
                 self.block(body);
                 self.out.push('\n');
             }
-            StmtKind::For { var, iter, body, .. } => {
+            StmtKind::For { pattern, iter, body } => {
                 self.out.push_str("for ");
-                self.out.push_str(&var.name);
+                self.pattern(pattern);
                 self.out.push_str(" in ");
                 self.expr(iter, 0);
                 self.out.push(' ');

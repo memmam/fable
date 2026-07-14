@@ -139,9 +139,10 @@ pub enum StmtKind {
         cond: Expr,
         body: Block,
     },
+    /// `for pattern in iter { .. }` — the pattern must be irrefutable
+    /// (a name, `_`, or a tuple of such).
     For {
-        var: Ident,
-        var_id: NodeId,
+        pattern: Pattern,
         iter: Expr,
         body: Block,
     },

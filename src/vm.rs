@@ -13,7 +13,18 @@ use crate::bytecode::{CompiledProgram, Const, Op, RtDef};
 use crate::source::Source;
 use crate::value::{FMap, Handle, Heap, Obj, Upval, Value};
 
-const MAX_FRAMES: usize = 4096;
+const DEFAULT_MAX_FRAMES: usize = 4096;
+
+/// The call-depth cap. `FABLE_MAX_DEPTH` overrides the default (floor 64 —
+/// below that the prelude itself couldn't run); recursive tree-walking
+/// workloads on deep data legitimately want more headroom than the default.
+fn max_frames() -> usize {
+    std::env::var("FABLE_MAX_DEPTH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.max(64))
+        .unwrap_or(DEFAULT_MAX_FRAMES)
+}
 
 pub struct TraceFrame {
     pub fn_name: String,
@@ -76,6 +87,8 @@ pub struct Vm {
     pub out: Box<dyn Write>,
     start: Instant,
     rng: u64,
+    /// Call-depth cap, read once from `FABLE_MAX_DEPTH` at construction.
+    max_frames: usize,
 }
 
 impl Vm {
@@ -101,6 +114,7 @@ impl Vm {
             script_args: Vec::new(),
             out,
             start: Instant::now(),
+            max_frames: max_frames(),
             rng: 0x9E3779B97F4A7C15 ^ {
                 use std::time::{SystemTime, UNIX_EPOCH};
                 SystemTime::now()
@@ -343,7 +357,7 @@ impl Vm {
         argc: u8,
         callee_slot: bool,
     ) -> Result<(), VmError> {
-        if self.frames.len() >= MAX_FRAMES {
+        if self.frames.len() >= self.max_frames {
             return Err(self.error("stack overflow"));
         }
         let p = &self.program.protos[proto as usize];
@@ -1561,18 +1575,38 @@ impl Vm {
     }
 
     pub fn rng_next(&mut self) -> f64 {
+        let r = self.rng_next_u64();
+        (r >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    pub fn rng_next_u64(&mut self) -> u64 {
         // xorshift64*
         let mut x = self.rng;
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
         self.rng = x;
-        let r = x.wrapping_mul(0x2545F4914F6CDD1D);
-        (r >> 11) as f64 / (1u64 << 53) as f64
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    /// A uniform integer in `[lo, hi]` (inclusive). Callers must check
+    /// `lo <= hi`. Uses the widening-multiply reduction, whose bias over a
+    /// 64-bit source is unmeasurable for any real span.
+    pub fn rng_range(&mut self, lo: i64, hi: i64) -> i64 {
+        let span = (hi as i128 - lo as i128 + 1) as u128;
+        let r = self.rng_next_u64() as u128;
+        lo.wrapping_add(((r * span) >> 64) as i64)
     }
 
     pub fn rng_seed(&mut self, seed: i64) {
-        self.rng = (seed as u64) | 1;
+        // SplitMix64: adjacent seeds must produce unrelated streams (the old
+        // `seed | 1` collapsed 2k and 2k+1 to the same state), and the state
+        // must never be zero (xorshift's fixed point).
+        let mut z = (seed as u64).wrapping_add(0x9E3779B97F4A7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^= z >> 31;
+        self.rng = if z == 0 { 0x9E3779B97F4A7C15 } else { z };
     }
 }
 
