@@ -20,7 +20,9 @@ import pyl.signal;
 import pyl.rand;
 import pyl.audio;
 
-let tmp = "/tmp/claude-0/-home-user-fable/4bdccfad-c698-5791-b6b7-13ba3d2113cf/scratchpad";
+// Scratch files land in TMPDIR (or /tmp) so the suite runs anywhere — CI
+// has no session scratchpad.
+let tmp = os.env("TMPDIR").unwrap_or("/tmp");
 
 // cascade gain at z = 1 (DC) and z = -1 (Nyquist)
 fn dc_gain(sos: List[signal.Sos]) -> Float {
