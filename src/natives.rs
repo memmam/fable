@@ -679,18 +679,11 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
         ListIsEmpty => Value::Bool(list_ref(vm, argc)?.is_empty()),
         ListPush => {
             let v = vm.native_arg(argc, 1);
-            let h = list_handle(vm, argc)?;
-            if let Obj::List(items) = vm.heap.get_mut(h) {
-                items.push(v);
-            }
+            with_list_mut(vm, argc, |items| items.push(v))?;
             Value::Unit
         }
         ListPop => {
-            let h = list_handle(vm, argc)?;
-            let popped = match vm.heap.get_mut(h) {
-                Obj::List(items) => items.pop(),
-                _ => None,
-            };
+            let popped = with_list_mut(vm, argc, |items| items.pop())?;
             match popped {
                 Some(v) => make_some(vm, v),
                 None => make_none(vm),
@@ -744,11 +737,10 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
             None => make_none(vm),
         },
         ListContains => {
+            // value_eq is &self, so the receiver borrow can live across it.
             let needle = vm.native_arg(argc, 1);
-            let len = list_ref(vm, argc)?.len();
             let mut found = false;
-            for i in 0..len {
-                let it = list_ref(vm, argc)?[i];
+            for &it in list_ref(vm, argc)? {
                 if vm.value_eq(it, needle, 0).map_err(|m| vm.error(m))? {
                     found = true;
                     break;
@@ -758,10 +750,8 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
         }
         ListIndexOf => {
             let needle = vm.native_arg(argc, 1);
-            let len = list_ref(vm, argc)?.len();
             let mut found = None;
-            for i in 0..len {
-                let it = list_ref(vm, argc)?[i];
+            for (i, &it) in list_ref(vm, argc)?.iter().enumerate() {
                 if vm.value_eq(it, needle, 0).map_err(|m| vm.error(m))? {
                     found = Some(i as i64);
                     break;
@@ -888,25 +878,36 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
             finish_rooted(vm, items.len() + 1, Value::Obj(out))
         }
         ListZip => {
-            let a = list_ref(vm, argc)?.clone();
+            // Both sources stay rooted on the stack and nothing user-visible
+            // runs during the loop, so read them in place per index instead
+            // of cloning both up front.
             let bh = expect_list(vm, vm.native_arg(argc, 1))?;
-            let b = match vm.heap.get(bh) {
-                Obj::List(items) => items.clone(),
-                _ => unreachable!(),
+            let a_len = list_ref(vm, argc)?.len();
+            let b_len = match vm.heap.get(bh) {
+                Obj::List(items) => items.len(),
+                _ => 0,
             };
-            let out = alloc_rooted_list(vm, Vec::new());
-            for (x, y) in a.into_iter().zip(b) {
-                let t = make_tuple(vm, vec![x, y]);
-                push_into(vm, out, t);
+            let n_pairs = a_len.min(b_len);
+            let out = alloc_rooted_list(vm, Vec::with_capacity(n_pairs));
+            for i in 0..n_pairs {
+                let x = list_ref(vm, argc)?[i];
+                let y = match vm.heap.get(bh) {
+                    Obj::List(items) => items[i],
+                    _ => Value::Unit,
+                };
+                let t = vm.alloc(Obj::Tuple(vec![x, y]));
+                push_into(vm, out, Value::Obj(t));
             }
             finish_rooted(vm, 1, Value::Obj(out))
         }
         ListEnumerate => {
-            let items = list_ref(vm, argc)?.clone();
-            let out = alloc_rooted_list(vm, Vec::new());
-            for (i, v) in items.into_iter().enumerate() {
-                let t = make_tuple(vm, vec![Value::Int(i as i64), v]);
-                push_into(vm, out, t);
+            let len = list_ref(vm, argc)?.len();
+            let out = alloc_rooted_list(vm, Vec::with_capacity(len));
+            for i in 0..len {
+                // The receiver on the stack keeps every element alive.
+                let v = list_ref(vm, argc)?[i];
+                let t = vm.alloc(Obj::Tuple(vec![Value::Int(i as i64), v]));
+                push_into(vm, out, Value::Obj(t));
             }
             finish_rooted(vm, 1, Value::Obj(out))
         }
@@ -922,11 +923,18 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
             make_list(vm, out)
         }
         ListConcat => {
-            let mut items = list_ref(vm, argc)?.clone();
-            let bh = expect_list(vm, vm.native_arg(argc, 1))?;
-            if let Obj::List(b) = vm.heap.get(bh) {
-                items.extend(b.iter().copied());
-            }
+            let items = {
+                let a = list_ref(vm, argc)?;
+                let bh = expect_list(vm, vm.native_arg(argc, 1))?;
+                let b = match vm.heap.get(bh) {
+                    Obj::List(items) => items,
+                    _ => unreachable!(),
+                };
+                let mut out = Vec::with_capacity(a.len() + b.len());
+                out.extend_from_slice(a);
+                out.extend_from_slice(b);
+                out
+            };
             make_list(vm, items)
         }
         ListJoin => {
@@ -966,10 +974,7 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
             make_list(vm, items)
         }
         ListClear => {
-            let h = list_handle(vm, argc)?;
-            if let Obj::List(items) = vm.heap.get_mut(h) {
-                items.clear();
-            }
+            with_list_mut(vm, argc, |items| items.clear())?;
             Value::Unit
         }
 
@@ -1185,13 +1190,14 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
         MapGet => {
             let key = vm.native_arg(argc, 1);
             let hash = vm.hash_value(key, 0).map_err(|m| vm.error(m))?;
-            let m = map_ref(vm, argc)?;
-            let found = vm.map_find(m, hash, key).map_err(|m| vm.error(m))?;
+            let found = {
+                let m = map_ref(vm, argc)?;
+                vm.map_find(m, hash, key)
+                    .map_err(|m| vm.error(m))?
+                    .map(|i| m.entries[i as usize].2)
+            };
             match found {
-                Some(i) => {
-                    let v = map_ref(vm, argc)?.entries[i as usize].2;
-                    make_some(vm, v)
-                }
+                Some(v) => make_some(vm, v),
                 None => make_none(vm),
             }
         }
@@ -1230,19 +1236,24 @@ pub fn call_native(vm: &mut Vm, n: Native, argc: u8) -> Result<(), VmError> {
             Value::Bool(vm.map_find(m, hash, key).map_err(|m| vm.error(m))?.is_some())
         }
         MapKeys | MapValues => {
-            let entries = map_ref(vm, argc)?.entries.clone();
-            let out = alloc_rooted_list(vm, Vec::new());
-            for (_, k, v) in entries {
-                push_into(vm, out, if matches!(n, MapKeys) { k } else { v });
-            }
-            finish_rooted(vm, 1, Value::Obj(out))
+            // No allocation happens while the borrow is live, so build the
+            // result Vec straight from the entries and allocate once.
+            let items: Vec<Value> = map_ref(vm, argc)?
+                .entries
+                .iter()
+                .map(|&(_, k, v)| if matches!(n, MapKeys) { k } else { v })
+                .collect();
+            make_list(vm, items)
         }
         MapEntries => {
-            let entries = map_ref(vm, argc)?.entries.clone();
-            let out = alloc_rooted_list(vm, Vec::new());
-            for (_, k, v) in entries {
-                let t = make_tuple(vm, vec![k, v]);
-                push_into(vm, out, t);
+            // The receiver on the stack keeps every key/value alive across
+            // the per-entry tuple allocations.
+            let len = map_ref(vm, argc)?.entries.len();
+            let out = alloc_rooted_list(vm, Vec::with_capacity(len));
+            for i in 0..len {
+                let (_, k, v) = map_ref(vm, argc)?.entries[i];
+                let t = vm.alloc(Obj::Tuple(vec![k, v]));
+                push_into(vm, out, Value::Obj(t));
             }
             finish_rooted(vm, 1, Value::Obj(out))
         }
@@ -1643,10 +1654,12 @@ fn bytes_handle(vm: &Vm, argc: u8) -> Result<Handle, VmError> {
 }
 
 fn bytes_ref(vm: &Vm, argc: u8) -> Result<&Vec<u8>, VmError> {
-    let h = bytes_handle(vm, argc)?;
-    match vm.heap.get(h) {
-        Obj::Bytes(bs) => Ok(bs),
-        _ => unreachable!(),
+    match vm.native_arg(argc, 0) {
+        Value::Obj(h) => match vm.heap.get(h) {
+            Obj::Bytes(bs) => Ok(bs),
+            _ => Err(vm.error("expected Bytes")),
+        },
+        _ => Err(vm.error("expected Bytes")),
     }
 }
 
@@ -1682,11 +1695,30 @@ fn bytes_arg(vm: &Vm, argc: u8, i: u8) -> Result<&Vec<u8>, VmError> {
 }
 
 fn list_ref(vm: &Vm, argc: u8) -> Result<&Vec<Value>, VmError> {
-    let h = list_handle(vm, argc)?;
-    match vm.heap.get(h) {
-        Obj::List(items) => Ok(items),
-        _ => unreachable!(),
+    match vm.native_arg(argc, 0) {
+        Value::Obj(h) => match vm.heap.get(h) {
+            Obj::List(items) => Ok(items),
+            _ => Err(vm.error("internal: expected List (VM bug)")),
+        },
+        _ => Err(vm.error("internal: expected List (VM bug)")),
     }
+}
+
+/// Run `f` on a mutable borrow of the receiver list — one heap lookup
+/// instead of `list_handle` + `heap.get_mut`, for in-place mutators.
+fn with_list_mut<T>(
+    vm: &mut Vm,
+    argc: u8,
+    f: impl FnOnce(&mut Vec<Value>) -> T,
+) -> Result<T, VmError> {
+    let r = match vm.native_arg(argc, 0) {
+        Value::Obj(h) => match vm.heap.get_mut(h) {
+            Obj::List(items) => Some(f(items)),
+            _ => None,
+        },
+        _ => None,
+    };
+    r.ok_or_else(|| vm.error("internal: expected List (VM bug)"))
 }
 
 fn map_handle(vm: &Vm, argc: u8) -> Result<Handle, VmError> {
@@ -1697,10 +1729,12 @@ fn map_handle(vm: &Vm, argc: u8) -> Result<Handle, VmError> {
 }
 
 fn map_ref(vm: &Vm, argc: u8) -> Result<&FMap, VmError> {
-    let h = map_handle(vm, argc)?;
-    match vm.heap.get(h) {
-        Obj::Map(m) => Ok(m),
-        _ => unreachable!(),
+    match vm.native_arg(argc, 0) {
+        Value::Obj(h) => match vm.heap.get(h) {
+            Obj::Map(m) => Ok(m),
+            _ => Err(vm.error("internal: expected Map (VM bug)")),
+        },
+        _ => Err(vm.error("internal: expected Map (VM bug)")),
     }
 }
 
