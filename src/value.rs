@@ -33,6 +33,7 @@ pub enum Upval {
 }
 
 #[derive(Debug, Clone)]
+#[repr(u8)] // explicit tag: a plain byte load beats a niche-encoded discriminant here
 pub enum Obj {
     /// Recycled slot (member of the free list).
     Free,
@@ -60,7 +61,53 @@ pub struct FMap {
     /// (key hash, key, value) in insertion order.
     pub entries: Vec<(u64, Value, Value)>,
     /// hash → entry indices.
-    index: std::collections::HashMap<u64, Vec<u32>>,
+    index: std::collections::HashMap<u64, Bucket, BuildMixHasher>,
+}
+
+/// The index keys are already FNV-mixed structural hashes; instead of
+/// SipHash-ing them again, finish with one splitmix64-style round (FNV's
+/// low bits alone avalanche poorly, and hashbrown derives both the bucket
+/// index and its control byte from the hash).
+#[derive(Debug, Clone, Copy, Default)]
+struct BuildMixHasher;
+
+#[derive(Default)]
+struct MixHasher(u64);
+
+impl std::hash::BuildHasher for BuildMixHasher {
+    type Hasher = MixHasher;
+    fn build_hasher(&self) -> MixHasher {
+        MixHasher(0)
+    }
+}
+
+impl std::hash::Hasher for MixHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        let mut x = n;
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+        x ^= x >> 31;
+        self.0 = x;
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // Not reached for u64 keys; kept correct for completeness.
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+    }
+}
+
+/// Entry indices sharing one key hash. True 64-bit collisions are rare, so
+/// the single-index case is stored inline (no per-key heap allocation).
+#[derive(Debug, Clone)]
+enum Bucket {
+    One(u32),
+    Many(Vec<u32>),
 }
 
 impl FMap {
@@ -78,13 +125,28 @@ impl FMap {
 
     /// Candidate entry indices for a key hash.
     pub fn candidates(&self, hash: u64) -> &[u32] {
-        self.index.get(&hash).map(|v| v.as_slice()).unwrap_or(&[])
+        match self.index.get(&hash) {
+            None => &[],
+            Some(Bucket::One(i)) => std::slice::from_ref(i),
+            Some(Bucket::Many(v)) => v,
+        }
     }
 
     pub fn push(&mut self, hash: u64, key: Value, value: Value) {
         let idx = self.entries.len() as u32;
         self.entries.push((hash, key, value));
-        self.index.entry(hash).or_default().push(idx);
+        match self.index.entry(hash) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(Bucket::One(idx));
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => match e.get_mut() {
+                Bucket::One(first) => {
+                    let first = *first;
+                    e.insert(Bucket::Many(vec![first, idx]));
+                }
+                Bucket::Many(v) => v.push(idx),
+            },
+        }
     }
 
     pub fn set_at(&mut self, idx: u32, value: Value) -> Value {
@@ -93,10 +155,36 @@ impl FMap {
 
     pub fn remove_at(&mut self, idx: u32) -> (u64, Value, Value) {
         let e = self.entries.remove(idx as usize);
-        // Indices shifted; rebuild the index (removal is the rare operation).
-        self.index.clear();
-        for (i, (h, _, _)) in self.entries.iter().enumerate() {
-            self.index.entry(*h).or_default().push(i as u32);
+        // Drop the removed entry from its bucket, then shift the indices
+        // that sat above it down by one (entries.remove shifted them).
+        match self.index.get_mut(&e.0) {
+            Some(Bucket::One(_)) => {
+                self.index.remove(&e.0);
+            }
+            Some(Bucket::Many(v)) => {
+                v.retain(|&i| i != idx);
+                if let [only] = v.as_slice() {
+                    let only = *only;
+                    self.index.insert(e.0, Bucket::One(only));
+                }
+            }
+            None => {}
+        }
+        for bucket in self.index.values_mut() {
+            match bucket {
+                Bucket::One(i) => {
+                    if *i > idx {
+                        *i -= 1;
+                    }
+                }
+                Bucket::Many(v) => {
+                    for i in v {
+                        if *i > idx {
+                            *i -= 1;
+                        }
+                    }
+                }
+            }
         }
         e
     }
@@ -107,14 +195,16 @@ impl FMap {
     }
 }
 
-struct Slot {
-    marked: bool,
-    obj: Obj,
-}
-
 pub struct Heap {
-    slots: Vec<Slot>,
+    /// Objects, indexed by `Handle`. Mark bits live in the parallel `marks`
+    /// vector so the mark phase can read an object's children while flagging
+    /// other slots (disjoint field borrows) — no copying, no per-object
+    /// allocation inside the trace loop.
+    objs: Vec<Obj>,
+    marks: Vec<bool>,
     free: Vec<Handle>,
+    /// Reusable mark-phase work list (kept across collections).
+    work: Vec<Handle>,
     live: usize,
     next_gc: usize,
     pub stress: bool,
@@ -133,8 +223,10 @@ impl Heap {
         let stress = std::env::var("FABLE_GC_STRESS").map(|v| v == "1").unwrap_or(false);
         let log = std::env::var("FABLE_GC_LOG").map(|v| v == "1").unwrap_or(false);
         Heap {
-            slots: Vec::new(),
+            objs: Vec::new(),
+            marks: Vec::new(),
             free: Vec::new(),
+            work: Vec::new(),
             live: 0,
             next_gc: 4096,
             stress,
@@ -147,69 +239,86 @@ impl Heap {
     pub fn alloc(&mut self, obj: Obj) -> Handle {
         self.live += 1;
         if let Some(h) = self.free.pop() {
-            self.slots[h as usize] = Slot { marked: false, obj };
+            self.objs[h as usize] = obj;
             h
         } else {
-            self.slots.push(Slot { marked: false, obj });
-            (self.slots.len() - 1) as Handle
+            self.objs.push(obj);
+            self.marks.push(false);
+            (self.objs.len() - 1) as Handle
         }
     }
 
     pub fn get(&self, h: Handle) -> &Obj {
-        &self.slots[h as usize].obj
+        &self.objs[h as usize]
     }
 
     pub fn get_mut(&mut self, h: Handle) -> &mut Obj {
-        &mut self.slots[h as usize].obj
+        &mut self.objs[h as usize]
     }
 
     pub fn wants_gc(&self) -> bool {
         self.stress || self.live >= self.next_gc
     }
 
-    /// Mark phase entry: mark a root value and everything reachable from it.
-    pub fn mark_value(&mut self, v: Value, work: &mut Vec<Handle>) {
+    /// Mark phase entry: flag a root value for tracing.
+    pub fn mark_value(&mut self, v: Value) {
         if let Value::Obj(h) = v {
-            self.mark_handle(h, work);
+            self.mark_handle(h);
         }
     }
 
-    pub fn mark_handle(&mut self, h: Handle, work: &mut Vec<Handle>) {
-        let slot = &mut self.slots[h as usize];
-        if !slot.marked {
-            slot.marked = true;
-            work.push(h);
+    pub fn mark_handle(&mut self, h: Handle) {
+        if !self.marks[h as usize] {
+            self.marks[h as usize] = true;
+            self.work.push(h);
         }
     }
 
-    /// Drain the work list, tracing children.
-    pub fn trace(&mut self, work: &mut Vec<Handle>) {
+    /// Drain the work list, tracing children. Mark bits live apart from the
+    /// objects, so children are flagged in place while the parent is borrowed
+    /// — no allocation inside the loop.
+    pub fn trace(&mut self) {
+        let Heap { objs, marks, work, .. } = self;
+        #[inline]
+        fn mark(marks: &mut [bool], work: &mut Vec<Handle>, h: Handle) {
+            if !marks[h as usize] {
+                marks[h as usize] = true;
+                work.push(h);
+            }
+        }
+        #[inline]
+        fn mark_v(marks: &mut [bool], work: &mut Vec<Handle>, v: Value) {
+            if let Value::Obj(h) = v {
+                mark(marks, work, h);
+            }
+        }
         while let Some(h) = work.pop() {
-            // Take the object's child handles without holding a borrow.
-            let mut children: Vec<Handle> = Vec::new();
-            let mut child_values: Vec<Value> = Vec::new();
-            match &self.slots[h as usize].obj {
+            match &objs[h as usize] {
                 Obj::Free | Obj::Str(_) | Obj::Range { .. } | Obj::Bytes(_)
                 | Obj::Worker(_) => {}
-                Obj::List(items) | Obj::Tuple(items) => child_values.extend(items.iter().copied()),
+                Obj::List(items) | Obj::Tuple(items) => {
+                    for &v in items {
+                        mark_v(marks, work, v);
+                    }
+                }
                 Obj::Map(m) => {
-                    for (_, k, v) in &m.entries {
-                        child_values.push(*k);
-                        child_values.push(*v);
+                    for &(_, k, v) in &m.entries {
+                        mark_v(marks, work, k);
+                        mark_v(marks, work, v);
                     }
                 }
                 Obj::Struct { fields, .. } | Obj::Variant { fields, .. } => {
-                    child_values.extend(fields.iter().copied())
+                    for &v in fields {
+                        mark_v(marks, work, v);
+                    }
                 }
-                Obj::Closure { upvals, .. } => children.extend(upvals.iter().copied()),
+                Obj::Closure { upvals, .. } => {
+                    for &c in upvals {
+                        mark(marks, work, c);
+                    }
+                }
                 Obj::Upvalue(Upval::Open(_)) => {}
-                Obj::Upvalue(Upval::Closed(v)) => child_values.push(*v),
-            }
-            for v in child_values {
-                self.mark_value(v, work);
-            }
-            for c in children {
-                self.mark_handle(c, work);
+                Obj::Upvalue(Upval::Closed(v)) => mark_v(marks, work, *v),
             }
         }
     }
@@ -217,11 +326,11 @@ impl Heap {
     /// Sweep phase: free unmarked slots, clear marks, retune the threshold.
     pub fn sweep(&mut self) {
         let before = self.live;
-        for (i, slot) in self.slots.iter_mut().enumerate() {
-            if slot.marked {
-                slot.marked = false;
-            } else if !matches!(slot.obj, Obj::Free) {
-                slot.obj = Obj::Free;
+        for (i, m) in self.marks.iter_mut().enumerate() {
+            if *m {
+                *m = false;
+            } else if !matches!(self.objs[i], Obj::Free) {
+                self.objs[i] = Obj::Free;
                 self.free.push(i as Handle);
                 self.live -= 1;
             }
@@ -243,3 +352,4 @@ impl Heap {
     }
 
 }
+

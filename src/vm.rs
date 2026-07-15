@@ -15,6 +15,15 @@ use crate::value::{FMap, Handle, Heap, Obj, Upval, Value};
 
 const DEFAULT_MAX_FRAMES: usize = 4096;
 
+// FNV-1a, the structural-hash primitive (`Vm::hash_value`).
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+#[inline]
+fn mix(h: u64, x: u64) -> u64 {
+    (h ^ x).wrapping_mul(FNV_PRIME)
+}
+
 /// The call-depth cap. `FABLE_MAX_DEPTH` overrides the default (floor 64 —
 /// below that the prelude itself couldn't run); recursive tree-walking
 /// workloads on deep data legitimately want more headroom than the default.
@@ -89,6 +98,11 @@ pub struct Vm {
     pub sources: Vec<Source>,
     /// Pre-resolved constants (strings interned as permanent handles).
     interned: Vec<Value>,
+    /// Lazily interned single-character ASCII strings (GC roots once
+    /// filled): `char()`, string iteration, `chars()`/`at()` hit these
+    /// constantly in char-at-a-time code. Boxed so the table doesn't
+    /// bloat `Vm` itself (hot fields stay on nearby cache lines).
+    ascii_strs: Box<[Value; 128]>,
     /// Cached zero-upvalue closures for `PushFn`.
     fn_closures: Vec<Option<Value>>,
     pub temp_roots: Vec<Value>,
@@ -128,6 +142,7 @@ impl Vm {
             },
             sources: Vec::new(),
             interned: Vec::new(),
+            ascii_strs: Box::new([Value::Undefined; 128]),
             fn_closures: Vec::new(),
             temp_roots: Vec::new(),
             script_args: Vec::new(),
@@ -245,31 +260,33 @@ impl Vm {
         if !self.heap.wants_gc() {
             return;
         }
-        let mut work: Vec<Handle> = Vec::new();
         for v in &self.stack {
-            self.heap.mark_value(*v, &mut work);
+            self.heap.mark_value(*v);
         }
         for v in &self.globals {
-            self.heap.mark_value(*v, &mut work);
+            self.heap.mark_value(*v);
         }
         for v in &self.temp_roots {
-            self.heap.mark_value(*v, &mut work);
+            self.heap.mark_value(*v);
         }
         for v in &self.interned {
-            self.heap.mark_value(*v, &mut work);
+            self.heap.mark_value(*v);
+        }
+        for v in self.ascii_strs.iter() {
+            self.heap.mark_value(*v);
         }
         for v in self.fn_closures.iter().flatten() {
-            self.heap.mark_value(*v, &mut work);
+            self.heap.mark_value(*v);
         }
         for h in &self.open_upvalues {
-            self.heap.mark_handle(*h, &mut work);
+            self.heap.mark_handle(*h);
         }
         for f in &self.frames {
             if let Some(h) = f.closure {
-                self.heap.mark_handle(h, &mut work);
+                self.heap.mark_handle(h);
             }
         }
-        self.heap.trace(&mut work);
+        self.heap.trace();
         self.heap.sweep();
     }
 
@@ -293,11 +310,20 @@ impl Vm {
         self.stack[self.stack.len() - 1 - from_top]
     }
 
-    fn as_bool(&self, v: Value) -> Result<bool, VmError> {
-        match v {
-            Value::Bool(b) => Ok(b),
-            _ => Err(self.error("internal: expected Bool (VM bug)")),
-        }
+    /// Write the dispatch loop's cached instruction pointer back into the
+    /// current frame. `run()` keeps `ip` in a local; anything that builds a
+    /// stack trace (errors, natives) or transfers control (calls, returns)
+    /// must see the real value, so those paths sync first.
+    #[inline]
+    fn sync_ip(&mut self, ip: usize) {
+        self.frames.last_mut().expect("no frame").ip = ip;
+    }
+
+    /// Sync `ip`, then build an error — the cold exit of dispatch handlers.
+    #[cold]
+    fn err_at(&mut self, ip: usize, msg: impl Into<String>) -> VmError {
+        self.sync_ip(ip);
+        self.error(msg)
     }
 
     /// Native calling convention: argument `i` of `argc` (stack-top relative).
@@ -307,9 +333,14 @@ impl Vm {
 
     /// Pop a native call's arguments and push its result.
     pub fn finish_native(&mut self, argc: u8, result: Value) {
-        let n = self.stack.len() - argc as usize;
-        self.stack.truncate(n);
-        self.stack.push(result);
+        if argc == 0 {
+            self.stack.push(result);
+        } else {
+            // Overwrite the first argument's slot, drop the rest.
+            let n = self.stack.len() - argc as usize;
+            self.stack[n] = result;
+            self.stack.truncate(n + 1);
+        }
     }
 
     pub fn str_of(&self, v: Value) -> Result<String, VmError> {
@@ -324,6 +355,23 @@ impl Vm {
 
     pub fn alloc_str(&mut self, s: String) -> Value {
         Value::Obj(self.alloc(Obj::Str(s)))
+    }
+
+    /// A single-character string. ASCII characters come from the interned
+    /// table (filled on first use) instead of allocating each time.
+    pub fn char_str(&mut self, c: char) -> Value {
+        if !c.is_ascii() {
+            return self.alloc_str(c.to_string());
+        }
+        let i = c as usize;
+        let v = self.ascii_strs[i];
+        if !matches!(v, Value::Undefined) {
+            return v;
+        }
+        let h = self.heap.alloc(Obj::Str(c.to_string()));
+        let v = Value::Obj(h);
+        self.ascii_strs[i] = v;
+        v
     }
 
     // ------------------------------------------------------------------
@@ -490,13 +538,17 @@ impl Vm {
     // ------------------------------------------------------------------
 
     fn run(&mut self, min_frames: usize) -> Result<(), VmError> {
+        // Frame-hot state lives in locals: `ip` (already advanced past the
+        // current op), `base`, and the current proto index. They are synced
+        // back to the frame at every call/return/error (see `sync_ip`), and
+        // reloaded whenever the current frame changes.
+        let frame = self.frames.last().expect("no frame");
+        let mut proto_idx = frame.proto as usize;
+        let mut ip = frame.ip;
+        let mut base = frame.base;
         loop {
-            let frame = self.frames.last_mut().expect("no frame");
-            let proto_idx = frame.proto as usize;
-            let ip = frame.ip;
-            frame.ip += 1;
-            let base = frame.base;
             let op = self.program.protos[proto_idx].code[ip];
+            ip += 1;
 
             match op {
                 Op::Const(i) => self.stack.push(self.interned[i as usize]),
@@ -544,9 +596,8 @@ impl Vm {
                             .get(g as usize)
                             .cloned()
                             .unwrap_or_default();
-                        return Err(
-                            self.error(format!("global `{name}` used before initialization"))
-                        );
+                        return Err(self
+                            .err_at(ip, format!("global `{name}` used before initialization")));
                     }
                     self.stack.push(v);
                 }
@@ -558,12 +609,12 @@ impl Vm {
                     let closure = self.frames.last().unwrap().closure.expect("no closure");
                     let uh = match self.heap.get(closure) {
                         Obj::Closure { upvals, .. } => upvals[i as usize],
-                        _ => return Err(self.error("internal: bad closure (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad closure (VM bug)")),
                     };
                     let v = match self.heap.get(uh) {
                         Obj::Upvalue(Upval::Open(idx)) => self.stack[*idx],
                         Obj::Upvalue(Upval::Closed(v)) => *v,
-                        _ => return Err(self.error("internal: bad upvalue (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad upvalue (VM bug)")),
                     };
                     self.stack.push(v);
                 }
@@ -572,7 +623,7 @@ impl Vm {
                     let closure = self.frames.last().unwrap().closure.expect("no closure");
                     let uh = match self.heap.get(closure) {
                         Obj::Closure { upvals, .. } => upvals[i as usize],
-                        _ => return Err(self.error("internal: bad closure (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad closure (VM bug)")),
                     };
                     match self.heap.get_mut(uh) {
                         Obj::Upvalue(u @ Upval::Open(_)) => {
@@ -581,7 +632,7 @@ impl Vm {
                             }
                         }
                         Obj::Upvalue(u) => *u = Upval::Closed(v),
-                        _ => return Err(self.error("internal: bad upvalue (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad upvalue (VM bug)")),
                     }
                 }
 
@@ -609,7 +660,7 @@ impl Vm {
                             let pc = parent_closure.expect("upvalue chain without closure");
                             let uh = match self.heap.get(pc) {
                                 Obj::Closure { upvals, .. } => upvals[d.index as usize],
-                                _ => return Err(self.error("internal: bad closure (VM bug)")),
+                                _ => return Err(self.err_at(ip, "internal: bad closure (VM bug)")),
                             };
                             upvals.push(uh);
                         }
@@ -619,28 +670,39 @@ impl Vm {
                 }
 
                 Op::Jump(off) => {
-                    let f = self.frames.last_mut().unwrap();
-                    f.ip = (f.ip as i64 + off as i64) as usize;
+                    ip = (ip as i64 + off as i64) as usize;
                 }
                 Op::JumpIfFalse(off) => {
                     let v = self.pop();
-                    if !self.as_bool(v)? {
-                        let f = self.frames.last_mut().unwrap();
-                        f.ip = (f.ip as i64 + off as i64) as usize;
+                    match v {
+                        Value::Bool(b) => {
+                            if !b {
+                                ip = (ip as i64 + off as i64) as usize;
+                            }
+                        }
+                        _ => return Err(self.err_at(ip, "internal: expected Bool (VM bug)")),
                     }
                 }
                 Op::JumpIfFalsePeek(off) => {
                     let v = self.peek(0);
-                    if !self.as_bool(v)? {
-                        let f = self.frames.last_mut().unwrap();
-                        f.ip = (f.ip as i64 + off as i64) as usize;
+                    match v {
+                        Value::Bool(b) => {
+                            if !b {
+                                ip = (ip as i64 + off as i64) as usize;
+                            }
+                        }
+                        _ => return Err(self.err_at(ip, "internal: expected Bool (VM bug)")),
                     }
                 }
                 Op::JumpIfTruePeek(off) => {
                     let v = self.peek(0);
-                    if self.as_bool(v)? {
-                        let f = self.frames.last_mut().unwrap();
-                        f.ip = (f.ip as i64 + off as i64) as usize;
+                    match v {
+                        Value::Bool(b) => {
+                            if b {
+                                ip = (ip as i64 + off as i64) as usize;
+                            }
+                        }
+                        _ => return Err(self.err_at(ip, "internal: expected Bool (VM bug)")),
                     }
                 }
 
@@ -651,26 +713,38 @@ impl Vm {
                             let proto = match self.heap.get(h) {
                                 Obj::Closure { proto, .. } => *proto,
                                 _ => {
-                                    return Err(self.error("value is not callable"));
+                                    return Err(self.err_at(ip, "value is not callable"));
                                 }
                             };
+                            self.sync_ip(ip);
                             self.push_frame(proto, Some(h), argc, true)?;
+                            proto_idx = proto as usize;
+                            ip = 0;
+                            base = self.stack.len() - argc as usize;
                         }
                         Value::Native(n) => {
+                            self.sync_ip(ip);
                             crate::natives::call_native(self, n, argc)?;
-                            // Remove the callee slot beneath the result.
+                            // Overwrite the callee slot beneath the result.
                             let result = self.pop();
-                            self.pop();
-                            self.stack.push(result);
+                            *self.stack.last_mut().expect("stack underflow (VM bug)") = result;
                         }
-                        _ => return Err(self.error("value is not callable")),
+                        _ => return Err(self.err_at(ip, "value is not callable")),
                     }
                 }
                 Op::CallFn(p, argc) => {
+                    self.sync_ip(ip);
                     self.push_frame(p, None, argc, false)?;
+                    proto_idx = p as usize;
+                    ip = 0;
+                    base = self.stack.len() - argc as usize;
                 }
                 Op::TailCallFn(p, argc) => {
+                    self.sync_ip(ip);
                     self.reuse_frame(p, None, argc)?;
+                    proto_idx = p as usize;
+                    ip = 0;
+                    base = self.frames.last().unwrap().base;
                 }
                 Op::TailCall(argc) => {
                     let callee = self.peek(argc as usize);
@@ -679,17 +753,23 @@ impl Vm {
                             let proto = match self.heap.get(h) {
                                 Obj::Closure { proto, .. } => *proto,
                                 _ => {
-                                    return Err(self.error("value is not callable"));
+                                    return Err(self.err_at(ip, "value is not callable"));
                                 }
                             };
+                            self.sync_ip(ip);
                             self.reuse_frame(proto, Some(h), argc)?;
+                            proto_idx = proto as usize;
+                            ip = 0;
+                            base = self.frames.last().unwrap().base;
                         }
                         Value::Native(n) => {
                             // A native in tail position pushes no frame; call
                             // it and return its result like `Op::Return`.
+                            self.sync_ip(ip);
                             crate::natives::call_native(self, n, argc)?;
                             let result = self.pop();
-                            self.pop(); // the callee slot
+                            // (The callee slot beneath is removed by the
+                            // truncate below.)
                             let f = self.frames.pop().unwrap();
                             self.close_upvalues(f.base);
                             let cut = f.base - usize::from(f.callee_slot);
@@ -698,11 +778,16 @@ impl Vm {
                             if self.frames.len() < min_frames {
                                 return Ok(());
                             }
+                            let f = self.frames.last().unwrap();
+                            proto_idx = f.proto as usize;
+                            ip = f.ip;
+                            base = f.base;
                         }
-                        _ => return Err(self.error("value is not callable")),
+                        _ => return Err(self.err_at(ip, "value is not callable")),
                     }
                 }
                 Op::CallNative(n, argc) => {
+                    self.sync_ip(ip);
                     crate::natives::call_native(self, n, argc)?;
                 }
                 Op::Return => {
@@ -715,42 +800,54 @@ impl Vm {
                     if self.frames.len() < min_frames {
                         return Ok(());
                     }
+                    let f = self.frames.last().unwrap();
+                    proto_idx = f.proto as usize;
+                    ip = f.ip;
+                    base = f.base;
                 }
 
-                Op::Add => self.op_add()?,
-                Op::Sub => self.op_arith(op)?,
-                Op::Mul => self.op_arith(op)?,
-                Op::Div => self.op_arith(op)?,
-                Op::Rem => self.op_arith(op)?,
+                Op::Add => self.op_add(ip)?,
+                Op::Sub => self.op_arith(op, ip)?,
+                Op::Mul => self.op_arith(op, ip)?,
+                Op::Div => self.op_arith(op, ip)?,
+                Op::Rem => self.op_arith(op, ip)?,
                 Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => {
-                    self.op_bitwise(op)?
+                    self.op_bitwise(op, ip)?
                 }
                 Op::Neg => {
                     let v = self.pop();
                     let r = match v {
                         Value::Int(i) => Value::Int(
-                            i.checked_neg().ok_or_else(|| self.error("integer overflow"))?,
+                            i.checked_neg()
+                                .ok_or_else(|| self.err_at(ip, "integer overflow"))?,
                         ),
                         Value::Float(f) => Value::Float(-f),
-                        _ => return Err(self.error("internal: bad negate operand (VM bug)")),
+                        _ => {
+                            return Err(
+                                self.err_at(ip, "internal: bad negate operand (VM bug)")
+                            )
+                        }
                     };
                     self.stack.push(r);
                 }
                 Op::Not => {
                     let v = self.pop();
-                    let b = self.as_bool(v)?;
-                    self.stack.push(Value::Bool(!b));
+                    match v {
+                        Value::Bool(b) => self.stack.push(Value::Bool(!b)),
+                        _ => return Err(self.err_at(ip, "internal: expected Bool (VM bug)")),
+                    }
                 }
                 Op::Eq => {
                     let b = self.peek(0);
                     let a = self.peek(1);
-                    let eq = self.value_eq(a, b, 0).map_err(|m| self.error(m))?;
-                    self.stack.truncate(self.stack.len() - 2);
-                    self.stack.push(Value::Bool(eq));
+                    let eq = self.value_eq(a, b, 0).map_err(|m| self.err_at(ip, m))?;
+                    let n = self.stack.len() - 2;
+                    self.stack[n] = Value::Bool(eq);
+                    self.stack.truncate(n + 1);
                 }
                 Op::Lt | Op::Le | Op::Gt | Op::Ge => {
-                    let b = self.pop();
-                    let a = self.pop();
+                    let b = self.peek(0);
+                    let a = self.peek(1);
                     // Floats get direct IEEE-754 comparisons (every ordered
                     // comparison involving NaN is false).
                     let r = if let (Value::Float(x), Value::Float(y)) = (a, b) {
@@ -761,7 +858,7 @@ impl Vm {
                             _ => x >= y,
                         }
                     } else {
-                        let ord = self.compare(a, b)?;
+                        let ord = self.compare(a, b).map_err(|m| self.err_at(ip, m))?;
                         match op {
                             Op::Lt => ord.is_lt(),
                             Op::Le => ord.is_le(),
@@ -769,22 +866,52 @@ impl Vm {
                             _ => ord.is_ge(),
                         }
                     };
-                    self.stack.push(Value::Bool(r));
+                    let n = self.stack.len() - 2;
+                    self.stack[n] = Value::Bool(r);
+                    self.stack.truncate(n + 1);
                 }
 
                 Op::ToString => {
+                    self.sync_ip(ip);
                     let v = self.peek(0);
-                    let s = self.display_value(v)?;
-                    let sv = self.alloc_str(s);
-                    self.pop();
-                    self.stack.push(sv);
+                    // A string already is its own display form; strings are
+                    // immutable and never identity-compared, so the handle
+                    // can stay in place as-is.
+                    if !matches!(v, Value::Obj(h)
+                        if matches!(self.heap.get(h), Obj::Str(_)))
+                    {
+                        let s = self.display_value(v)?;
+                        let sv = self.alloc_str(s);
+                        self.pop();
+                        self.stack.push(sv);
+                    }
                 }
                 Op::Concat(n) => {
+                    self.sync_ip(ip);
                     let n = n as usize;
-                    let mut s = String::new();
+                    // Exact-size the result, then copy each part straight
+                    // out of the heap (no per-part clone).
+                    let mut cap = 0usize;
+                    for i in 0..n {
+                        match self.peek(i) {
+                            Value::Obj(h) => match self.heap.get(h) {
+                                Obj::Str(part) => cap += part.len(),
+                                _ => {
+                                    return Err(
+                                        self.error("internal: expected String (VM bug)")
+                                    )
+                                }
+                            },
+                            _ => {
+                                return Err(self.error("internal: expected String (VM bug)"))
+                            }
+                        }
+                    }
+                    let mut s = String::with_capacity(cap);
                     for i in (0..n).rev() {
-                        let part = self.peek(i);
-                        s.push_str(&self.str_of(part)?);
+                        let Value::Obj(h) = self.peek(i) else { unreachable!() };
+                        let Obj::Str(part) = self.heap.get(h) else { unreachable!() };
+                        s.push_str(part);
                     }
                     let sv = self.alloc_str(s);
                     let len = self.stack.len() - n;
@@ -800,6 +927,7 @@ impl Vm {
                     self.stack.push(Value::Obj(h));
                 }
                 Op::MakeMap(n) => {
+                    self.sync_ip(ip);
                     self.gc_checkpoint();
                     let start = self.stack.len() - 2 * n as usize;
                     let kvs: Vec<Value> = self.stack.split_off(start);
@@ -834,7 +962,7 @@ impl Vm {
                     let hi = self.pop();
                     let lo = self.pop();
                     let (Value::Int(lo), Value::Int(hi)) = (lo, hi) else {
-                        return Err(self.error("internal: bad range bounds (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad range bounds (VM bug)"));
                     };
                     let h = self.heap.alloc(Obj::Range { lo, hi, inclusive });
                     self.stack.push(Value::Obj(h));
@@ -855,11 +983,11 @@ impl Vm {
                     let v = self.pop();
                     let s = self.peek(0);
                     let Value::Obj(h) = s else {
-                        return Err(self.error("internal: bad struct (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad struct (VM bug)"));
                     };
                     match self.heap.get_mut(h) {
                         Obj::Struct { fields, .. } => fields[i as usize] = v,
-                        _ => return Err(self.error("internal: bad struct (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad struct (VM bug)")),
                     }
                 }
                 Op::MakeVariant { def, variant, arity } => {
@@ -877,11 +1005,11 @@ impl Vm {
                 Op::GetField(i) => {
                     let s = self.pop();
                     let Value::Obj(h) = s else {
-                        return Err(self.error("internal: bad struct (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad struct (VM bug)"));
                     };
                     let v = match self.heap.get(h) {
                         Obj::Struct { fields, .. } => fields[i as usize],
-                        _ => return Err(self.error("internal: bad struct (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad struct (VM bug)")),
                     };
                     self.stack.push(v);
                 }
@@ -889,43 +1017,43 @@ impl Vm {
                     let v = self.pop();
                     let s = self.pop();
                     let Value::Obj(h) = s else {
-                        return Err(self.error("internal: bad struct (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad struct (VM bug)"));
                     };
                     match self.heap.get_mut(h) {
                         Obj::Struct { fields, .. } => fields[i as usize] = v,
-                        _ => return Err(self.error("internal: bad struct (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad struct (VM bug)")),
                     }
                 }
                 Op::TupleGet(i) => {
                     let t = self.pop();
                     let Value::Obj(h) = t else {
-                        return Err(self.error("internal: bad tuple (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad tuple (VM bug)"));
                     };
                     let v = match self.heap.get(h) {
                         Obj::Tuple(items) => items[i as usize],
-                        _ => return Err(self.error("internal: bad tuple (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad tuple (VM bug)")),
                     };
                     self.stack.push(v);
                 }
                 Op::GetVariantField(i) => {
                     let t = self.pop();
                     let Value::Obj(h) = t else {
-                        return Err(self.error("internal: bad enum value (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad enum value (VM bug)"));
                     };
                     let v = match self.heap.get(h) {
                         Obj::Variant { fields, .. } => fields[i as usize],
-                        _ => return Err(self.error("internal: bad enum value (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad enum value (VM bug)")),
                     };
                     self.stack.push(v);
                 }
                 Op::TestVariant(i) => {
                     let t = self.peek(0);
                     let Value::Obj(h) = t else {
-                        return Err(self.error("internal: bad enum value (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad enum value (VM bug)"));
                     };
                     let b = match self.heap.get(h) {
                         Obj::Variant { variant, .. } => *variant == i as u32,
-                        _ => return Err(self.error("internal: bad enum value (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad enum value (VM bug)")),
                     };
                     self.stack.push(Value::Bool(b));
                 }
@@ -933,14 +1061,14 @@ impl Vm {
                 Op::Index => {
                     let idx = self.pop();
                     let base_v = self.pop();
-                    let v = self.index_get(base_v, idx)?;
+                    let v = self.index_get(base_v, idx, ip)?;
                     self.stack.push(v);
                 }
                 Op::IndexSet => {
                     let v = self.pop();
                     let idx = self.pop();
                     let base_v = self.pop();
-                    self.index_set(base_v, idx, v)?;
+                    self.index_set(base_v, idx, v, ip)?;
                 }
 
                 Op::ForPrep => {
@@ -949,9 +1077,11 @@ impl Vm {
                         Value::Obj(h) => match self.heap.get(h) {
                             Obj::List(_) | Obj::Str(_) => Value::Int(0),
                             Obj::Range { lo, .. } => Value::Int(*lo),
-                            _ => return Err(self.error("internal: bad iterable (VM bug)")),
+                            _ => {
+                                return Err(self.err_at(ip, "internal: bad iterable (VM bug)"))
+                            }
                         },
-                        _ => return Err(self.error("internal: bad iterable (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad iterable (VM bug)")),
                     };
                     self.stack.push(state);
                 }
@@ -959,12 +1089,12 @@ impl Vm {
                     let state = self.peek(0);
                     let iter = self.peek(1);
                     let Value::Obj(h) = iter else {
-                        return Err(self.error("internal: bad iterable (VM bug)"));
+                        return Err(self.err_at(ip, "internal: bad iterable (VM bug)"));
                     };
                     enum Next {
                         Done,
                         Elem(Value, Value),
-                        Char(String, Value),
+                        Char(char, Value),
                     }
                     let next = match (self.heap.get(h), state) {
                         (Obj::List(items), Value::Int(i)) => {
@@ -990,19 +1120,17 @@ impl Vm {
                         (Obj::Str(s), Value::Int(i)) => {
                             let i = i as usize;
                             match s[i..].chars().next() {
-                                Some(c) => Next::Char(
-                                    c.to_string(),
-                                    Value::Int((i + c.len_utf8()) as i64),
-                                ),
+                                Some(c) => {
+                                    Next::Char(c, Value::Int((i + c.len_utf8()) as i64))
+                                }
                                 None => Next::Done,
                             }
                         }
-                        _ => return Err(self.error("internal: bad iterable (VM bug)")),
+                        _ => return Err(self.err_at(ip, "internal: bad iterable (VM bug)")),
                     };
                     match next {
                         Next::Done => {
-                            let f = self.frames.last_mut().unwrap();
-                            f.ip = (f.ip as i64 + off as i64) as usize;
+                            ip = (ip as i64 + off as i64) as usize;
                         }
                         Next::Elem(elem, new_state) => {
                             let len = self.stack.len();
@@ -1010,16 +1138,45 @@ impl Vm {
                             self.stack.push(elem);
                         }
                         Next::Char(c, new_state) => {
-                            let sv = self.alloc_str(c);
+                            let sv = self.char_str(c);
                             let len = self.stack.len();
                             self.stack[len - 1] = new_state;
                             self.stack.push(sv);
                         }
                     }
                 }
+                Op::ForNextRange { off, inclusive } => {
+                    let hi_v = self.peek(0);
+                    let cur_v = self.peek(1);
+                    match (cur_v, hi_v) {
+                        (Value::Int(cur), Value::Int(hi)) => {
+                            let in_range = if inclusive { cur <= hi } else { cur < hi };
+                            if in_range {
+                                let next_state = cur
+                                    .checked_add(1)
+                                    .map(Value::Int)
+                                    .unwrap_or(Value::Unit);
+                                let n = self.stack.len();
+                                self.stack[n - 2] = next_state;
+                                self.stack.push(Value::Int(cur));
+                            } else {
+                                ip = (ip as i64 + off as i64) as usize;
+                            }
+                        }
+                        (Value::Unit, _) => {
+                            ip = (ip as i64 + off as i64) as usize;
+                        }
+                        _ => {
+                            return Err(
+                                self.err_at(ip, "internal: bad range loop state (VM bug)")
+                            )
+                        }
+                    }
+                }
 
                 Op::MatchFail => {
-                    return Err(self.error(
+                    return Err(self.err_at(
+                        ip,
                         "match did not cover the scrutinee value (all arms failed)",
                     ));
                 }
@@ -1027,33 +1184,34 @@ impl Vm {
         }
     }
 
-    fn op_add(&mut self) -> Result<(), VmError> {
+    fn op_add(&mut self, ip: usize) -> Result<(), VmError> {
         let b = self.peek(0);
         let a = self.peek(1);
         let r = match (a, b) {
             (Value::Int(x), Value::Int(y)) => Value::Int(
-                x.checked_add(y).ok_or_else(|| self.error("integer overflow"))?,
+                x.checked_add(y).ok_or_else(|| self.err_at(ip, "integer overflow"))?,
             ),
             (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
             (Value::Obj(x), Value::Obj(y)) => {
                 let (Obj::Str(sx), Obj::Str(sy)) = (self.heap.get(x), self.heap.get(y)) else {
-                    return Err(self.error("internal: bad `+` operands (VM bug)"));
+                    return Err(self.err_at(ip, "internal: bad `+` operands (VM bug)"));
                 };
                 let mut s = String::with_capacity(sx.len() + sy.len());
                 s.push_str(sx);
                 s.push_str(sy);
                 self.alloc_str(s)
             }
-            _ => return Err(self.error("internal: bad `+` operands (VM bug)")),
+            _ => return Err(self.err_at(ip, "internal: bad `+` operands (VM bug)")),
         };
-        self.stack.truncate(self.stack.len() - 2);
-        self.stack.push(r);
+        let n = self.stack.len() - 2;
+        self.stack[n] = r;
+        self.stack.truncate(n + 1);
         Ok(())
     }
 
-    fn op_arith(&mut self, op: Op) -> Result<(), VmError> {
-        let b = self.pop();
-        let a = self.pop();
+    fn op_arith(&mut self, op: Op, ip: usize) -> Result<(), VmError> {
+        let b = self.peek(0);
+        let a = self.peek(1);
         let r = match (a, b) {
             (Value::Int(x), Value::Int(y)) => {
                 let v = match op {
@@ -1061,40 +1219,42 @@ impl Vm {
                     Op::Mul => x.checked_mul(y),
                     Op::Div => {
                         if y == 0 {
-                            return Err(self.error("division by zero"));
+                            return Err(self.err_at(ip, "division by zero"));
                         }
                         x.checked_div(y)
                     }
                     Op::Rem => {
                         if y == 0 {
-                            return Err(self.error("modulo by zero"));
+                            return Err(self.err_at(ip, "modulo by zero"));
                         }
                         x.checked_rem(y)
                     }
                     _ => unreachable!(),
                 };
-                Value::Int(v.ok_or_else(|| self.error("integer overflow"))?)
+                Value::Int(v.ok_or_else(|| self.err_at(ip, "integer overflow"))?)
             }
             (Value::Float(x), Value::Float(y)) => Value::Float(match op {
                 Op::Sub => x - y,
                 Op::Mul => x * y,
                 Op::Div => x / y,
-                _ => return Err(self.error("internal: `%` on Float (VM bug)")),
+                _ => return Err(self.err_at(ip, "internal: `%` on Float (VM bug)")),
             }),
-            _ => return Err(self.error("internal: bad arithmetic operands (VM bug)")),
+            _ => return Err(self.err_at(ip, "internal: bad arithmetic operands (VM bug)")),
         };
-        self.stack.push(r);
+        let n = self.stack.len() - 2;
+        self.stack[n] = r;
+        self.stack.truncate(n + 1);
         Ok(())
     }
 
     /// Bitwise ops (v0.7): Int-only by the checker. `>>` is arithmetic
     /// (sign-extending), matching the two's-complement Int; shift counts
     /// outside 0..=63 panic rather than quietly wrapping.
-    fn op_bitwise(&mut self, op: Op) -> Result<(), VmError> {
-        let b = self.pop();
-        let a = self.pop();
+    fn op_bitwise(&mut self, op: Op, ip: usize) -> Result<(), VmError> {
+        let b = self.peek(0);
+        let a = self.peek(1);
         let (Value::Int(x), Value::Int(y)) = (a, b) else {
-            return Err(self.error("internal: bad bitwise operands (VM bug)"));
+            return Err(self.err_at(ip, "internal: bad bitwise operands (VM bug)"));
         };
         let v = match op {
             Op::BitAnd => x & y,
@@ -1102,9 +1262,10 @@ impl Vm {
             Op::BitXor => x ^ y,
             Op::Shl | Op::Shr => {
                 if !(0..64).contains(&y) {
-                    return Err(self.error(format!(
-                        "shift amount out of range: {y} (must be 0..=63)"
-                    )));
+                    return Err(self.err_at(
+                        ip,
+                        format!("shift amount out of range: {y} (must be 0..=63)"),
+                    ));
                 }
                 if matches!(op, Op::Shl) {
                     x.wrapping_shl(y as u32)
@@ -1114,11 +1275,13 @@ impl Vm {
             }
             _ => unreachable!(),
         };
-        self.stack.push(Value::Int(v));
+        let n = self.stack.len() - 2;
+        self.stack[n] = Value::Int(v);
+        self.stack.truncate(n + 1);
         Ok(())
     }
 
-    fn compare(&self, a: Value, b: Value) -> Result<std::cmp::Ordering, VmError> {
+    fn compare(&self, a: Value, b: Value) -> Result<std::cmp::Ordering, String> {
         use std::cmp::Ordering;
         match (a, b) {
             (Value::Int(x), Value::Int(y)) => Ok(x.cmp(&y)),
@@ -1127,9 +1290,9 @@ impl Vm {
             }
             (Value::Obj(x), Value::Obj(y)) => match (self.heap.get(x), self.heap.get(y)) {
                 (Obj::Str(sx), Obj::Str(sy)) => Ok(sx.cmp(sy)),
-                _ => Err(self.error("internal: bad comparison operands (VM bug)")),
+                _ => Err("internal: bad comparison operands (VM bug)".into()),
             },
-            _ => Err(self.error("internal: bad comparison operands (VM bug)")),
+            _ => Err("internal: bad comparison operands (VM bug)".into()),
         }
     }
 
@@ -1137,56 +1300,59 @@ impl Vm {
     // Indexing
     // ------------------------------------------------------------------
 
-    fn index_get(&mut self, base: Value, idx: Value) -> Result<Value, VmError> {
+    fn index_get(&mut self, base: Value, idx: Value, ip: usize) -> Result<Value, VmError> {
         let Value::Obj(h) = base else {
-            return Err(self.error("internal: bad index base (VM bug)"));
+            return Err(self.err_at(ip, "internal: bad index base (VM bug)"));
         };
         match self.heap.get(h) {
             Obj::List(items) => {
                 let Value::Int(i) = idx else {
-                    return Err(self.error("internal: bad list index (VM bug)"));
+                    return Err(self.err_at(ip, "internal: bad list index (VM bug)"));
                 };
                 if i < 0 || i as usize >= items.len() {
                     let len = items.len();
-                    return Err(self.error(format!(
-                        "list index out of bounds: index {i}, length {len}"
-                    )));
+                    return Err(self.err_at(
+                        ip,
+                        format!("list index out of bounds: index {i}, length {len}"),
+                    ));
                 }
                 Ok(items[i as usize])
             }
             Obj::Map(_) => {
-                let hash = self.hash_value(idx, 0).map_err(|m| self.error(m))?;
+                let hash = self.hash_value(idx, 0).map_err(|m| self.err_at(ip, m))?;
                 let Obj::Map(m) = self.heap.get(h) else { unreachable!() };
-                let found = self.map_find(m, hash, idx).map_err(|m| self.error(m))?;
+                let found = self.map_find(m, hash, idx).map_err(|m| self.err_at(ip, m))?;
                 match found {
                     Some(i) => {
                         let Obj::Map(m) = self.heap.get(h) else { unreachable!() };
                         Ok(m.entries[i as usize].2)
                     }
                     None => {
+                        self.sync_ip(ip);
                         let ks = self.display_value(idx)?;
                         Err(self.error(format!("key not found in map: {ks}")))
                     }
                 }
             }
-            _ => Err(self.error("internal: bad index base (VM bug)")),
+            _ => Err(self.err_at(ip, "internal: bad index base (VM bug)")),
         }
     }
 
-    fn index_set(&mut self, base: Value, idx: Value, v: Value) -> Result<(), VmError> {
+    fn index_set(&mut self, base: Value, idx: Value, v: Value, ip: usize) -> Result<(), VmError> {
         let Value::Obj(h) = base else {
-            return Err(self.error("internal: bad index base (VM bug)"));
+            return Err(self.err_at(ip, "internal: bad index base (VM bug)"));
         };
         match self.heap.get(h) {
             Obj::List(items) => {
                 let Value::Int(i) = idx else {
-                    return Err(self.error("internal: bad list index (VM bug)"));
+                    return Err(self.err_at(ip, "internal: bad list index (VM bug)"));
                 };
                 let len = items.len();
                 if i < 0 || i as usize >= len {
-                    return Err(self.error(format!(
-                        "list index out of bounds: index {i}, length {len}"
-                    )));
+                    return Err(self.err_at(
+                        ip,
+                        format!("list index out of bounds: index {i}, length {len}"),
+                    ));
                 }
                 match self.heap.get_mut(h) {
                     Obj::List(items) => items[i as usize] = v,
@@ -1195,10 +1361,11 @@ impl Vm {
                 Ok(())
             }
             Obj::Map(_) => {
+                self.sync_ip(ip);
                 self.map_insert(h, idx, v)?;
                 Ok(())
             }
-            _ => Err(self.error("internal: bad index base (VM bug)")),
+            _ => Err(self.err_at(ip, "internal: bad index base (VM bug)")),
         }
     }
 
@@ -1382,6 +1549,28 @@ impl Vm {
     /// other doesn't). Cyclic or absurdly large keys exhaust the node budget
     /// and error; map entries combine order-insensitively via nested calls.
     pub fn hash_value(&self, v: Value, _depth: u32) -> Result<u64, String> {
+        // Scalar/string fast path: identical hashes to the worklist walk
+        // below, without allocating it (Int and Str keys dominate hot maps).
+        match v {
+            Value::Unit => return Ok(mix(FNV_OFFSET, 1)),
+            Value::Bool(b) => return Ok(mix(FNV_OFFSET, 2 + b as u64)),
+            Value::Int(i) => return Ok(mix(mix(FNV_OFFSET, 4), i as u64)),
+            Value::Float(f) => {
+                let bits = if f == 0.0 { 0u64 } else { f.to_bits() };
+                return Ok(mix(mix(FNV_OFFSET, 5), bits));
+            }
+            Value::Undefined => return Ok(mix(FNV_OFFSET, 6)),
+            Value::Native(_) => return Err("functions cannot be used as map keys".into()),
+            Value::Obj(h) => {
+                if let Obj::Str(s) = self.heap.get(h) {
+                    let mut acc = mix(FNV_OFFSET, 7);
+                    for b in s.bytes() {
+                        acc = mix(acc, b as u64);
+                    }
+                    return Ok(acc);
+                }
+            }
+        }
         let mut budget: u32 = 4_000_000;
         self.hash_value_impl(v, 0, &mut budget)
     }
@@ -1394,11 +1583,6 @@ impl Vm {
     ) -> Result<u64, String> {
         if map_depth > 64 {
             return Err("map nesting exceeds 64 levels in key".into());
-        }
-        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-        const FNV_PRIME: u64 = 0x100000001b3;
-        fn mix(h: u64, x: u64) -> u64 {
-            (h ^ x).wrapping_mul(FNV_PRIME)
         }
         let mut acc = FNV_OFFSET;
         let mut work: Vec<Value> = vec![v];
@@ -1485,6 +1669,24 @@ impl Vm {
     /// `str(x)` semantics: bare strings at the top level, quoted in containers.
     /// Nesting deeper than 10,000 levels renders as `...` (as do cycles).
     pub fn display_value(&self, v: Value) -> Result<String, VmError> {
+        // Scalar/string fast paths: byte-identical output to `display_inner`,
+        // skipping the fmt machinery and the seen-list plumbing.
+        match v {
+            Value::Unit => return Ok("()".to_string()),
+            Value::Bool(b) => return Ok((if b { "true" } else { "false" }).to_string()),
+            Value::Int(i) => {
+                let mut s = String::new();
+                push_int(&mut s, i);
+                return Ok(s);
+            }
+            Value::Float(f) => return Ok(fmt_float(f)),
+            Value::Obj(h) => {
+                if let Obj::Str(s) = self.heap.get(h) {
+                    return Ok(s.clone());
+                }
+            }
+            _ => {}
+        }
         let mut out = String::new();
         let mut seen = Vec::new();
         self.display_inner(v, true, &mut seen, &mut out, 0)
@@ -1500,22 +1702,19 @@ impl Vm {
         out: &mut String,
         depth: u32,
     ) -> Result<(), String> {
-        use std::fmt::Write;
         if depth > 10_000 {
             out.push_str("...");
             return Ok(());
         }
         match v {
             Value::Unit => out.push_str("()"),
-            Value::Bool(b) => {
-                let _ = write!(out, "{b}");
-            }
-            Value::Int(i) => {
-                let _ = write!(out, "{i}");
-            }
+            Value::Bool(b) => out.push_str(if b { "true" } else { "false" }),
+            Value::Int(i) => push_int(out, i),
             Value::Float(f) => out.push_str(&fmt_float(f)),
             Value::Native(n) => {
-                let _ = write!(out, "<fn {}>", n.name());
+                out.push_str("<fn ");
+                out.push_str(n.name());
+                out.push('>');
             }
             Value::Undefined => out.push_str("<undefined>"),
             Value::Obj(h) => {
@@ -1525,7 +1724,9 @@ impl Vm {
                 }
                 match self.heap.get(h) {
                     Obj::Bytes(bs) => {
-                        let _ = write!(out, "<bytes {}>", bs.len());
+                        out.push_str("<bytes ");
+                        push_int(out, bs.len() as i64);
+                        out.push('>');
                         return Ok(());
                     }
                     Obj::Worker(_) => {
@@ -1536,17 +1737,25 @@ impl Vm {
                         if top {
                             out.push_str(s);
                         } else {
+                            // Copy escape-free runs whole; the escaped
+                            // characters are all ASCII, so slicing one byte
+                            // past a match stays on a char boundary.
                             out.push('"');
-                            for c in s.chars() {
-                                match c {
-                                    '\n' => out.push_str("\\n"),
-                                    '\t' => out.push_str("\\t"),
-                                    '\r' => out.push_str("\\r"),
-                                    '"' => out.push_str("\\\""),
-                                    '\\' => out.push_str("\\\\"),
-                                    _ => out.push(c),
-                                }
+                            let mut rest = s.as_str();
+                            while let Some(i) =
+                                rest.find(['\n', '\t', '\r', '"', '\\'])
+                            {
+                                out.push_str(&rest[..i]);
+                                out.push_str(match rest.as_bytes()[i] {
+                                    b'\n' => "\\n",
+                                    b'\t' => "\\t",
+                                    b'\r' => "\\r",
+                                    b'"' => "\\\"",
+                                    _ => "\\\\",
+                                });
+                                rest = &rest[i + 1..];
                             }
+                            out.push_str(rest);
                             out.push('"');
                         }
                     }
@@ -1599,12 +1808,14 @@ impl Vm {
                         else {
                             return Err("internal: bad struct def (VM bug)".into());
                         };
-                        let _ = write!(out, "{name} {{ ");
+                        out.push_str(name);
+                        out.push_str(" { ");
                         for (i, (fv, fname)) in fields.iter().zip(fnames).enumerate() {
                             if i > 0 {
                                 out.push_str(", ");
                             }
-                            let _ = write!(out, "{fname}: ");
+                            out.push_str(fname);
+                            out.push_str(": ");
                             self.display_inner(*fv, false, seen, out, depth + 1)?;
                         }
                         out.push_str(" }");
@@ -1630,14 +1841,18 @@ impl Vm {
                         seen.pop();
                     }
                     Obj::Range { lo, hi, inclusive } => {
-                        let _ = write!(out, "{}..{}{}", lo, if *inclusive { "=" } else { "" }, hi);
+                        push_int(out, *lo);
+                        out.push_str(if *inclusive { "..=" } else { ".." });
+                        push_int(out, *hi);
                     }
                     Obj::Closure { proto, .. } => {
                         let name = &self.program.protos[*proto as usize].name;
                         if name == "<lambda>" {
                             out.push_str("<fn>");
                         } else {
-                            let _ = write!(out, "<fn {name}>");
+                            out.push_str("<fn ");
+                            out.push_str(name);
+                            out.push('>');
                         }
                     }
                     Obj::Upvalue(_) | Obj::Free => out.push_str("<internal>"),
@@ -1699,6 +1914,28 @@ impl Vm {
         z ^= z >> 31;
         self.rng = if z == 0 { 0x9E3779B97F4A7C15 } else { z };
     }
+}
+
+/// Append `n`'s decimal form — byte-identical to `write!(out, "{n}")` —
+/// without going through `fmt`'s `Arguments` machinery (hot in container
+/// display).
+fn push_int(out: &mut String, n: i64) {
+    let mut buf = [0u8; 20]; // i64::MIN is 20 bytes: 19 digits + sign
+    let mut i = buf.len();
+    let mut m = n.unsigned_abs();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (m % 10) as u8;
+        m /= 10;
+        if m == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    out.push_str(std::str::from_utf8(&buf[i..]).expect("ASCII digits"));
 }
 
 /// Float display: shortest round-trip digits; positional notation (`123.5`,
