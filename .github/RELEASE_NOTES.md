@@ -9,9 +9,7 @@ spreadsheet, a regex engine, checkers, wave-function collapse, and five
 more) were written against v0.5 with orders to report every papercut, and
 this release is their reports answered — including one genuine RNG bug
 their golden tests caught. The full triage is
-[`demos/NOTES.md`](https://github.com/memmam/fable/blob/main/demos/NOTES.md);
-the narrative is
-[book chapter 10](https://github.com/memmam/fable/blob/main/book/10-field-test.md).
+[`demos/NOTES.md`](https://github.com/memmam/fable/blob/main/demos/NOTES.md).
 
 Highlights of v0.6 over v0.5 (full history in
 [`CHANGELOG.md`](https://github.com/memmam/fable/blob/main/CHANGELOG.md)):

@@ -1,4 +1,4 @@
-# Structs, Enums, and Pattern Matching
+# Structs, Enums, and Methods
 
 This chapter is about modeling data: structs for "this *and* that", enums for
 "this *or* that", and `match` for taking data apart again — with the compiler
@@ -84,8 +84,8 @@ Pair { first: 1, second: "one" }
 
 (Strings nested inside a printed container are quoted.) Operations on your
 types can be free functions — a handful of types followed by the functions
-that work on them is a fine shape for a Fable program — or, since v0.2,
-methods in an `impl` block (chapter 7). There are still no traits.
+that work on them is a fine shape for a Fable program — or methods in an
+`impl` block (see below). There are still no traits.
 
 ## Enums
 
@@ -131,7 +131,7 @@ Constructing a variant requires the enum name (`Circle(1.0)` alone is
 
 Fable has no null. The prelude defines two enums you will use constantly:
 `enum Option[T] { Some(T), None }` and `enum Result[T, E] { Ok(T), Err(E) }`.
-Only two things about them are special: the `?` operator (chapter 7)
+Only two things about them are special: the `?` operator (chapter 6)
 propagates their failure cases, and — a courtesy — their variants may be
 used *unqualified*, both when constructing and in patterns. `Some(5)` and `Option.Some(5)` are
 the same value.
@@ -374,7 +374,7 @@ error[E0503]: refutable pattern in a `let` binding
 ## Early exit from a match arm: `return`
 
 An arm body may be a bare `return` (or `break`/`continue` inside a loop) —
-sugar, added in v0.6, for the one-statement block `{ return ...; }`. An arm
+sugar for the one-statement block `{ return ...; }`. An arm
 that exits never produces a value, so the checker exempts it from the "all
 arms have the same type" rule. That makes `match` a tidy way to peel off the
 failure case and continue with the success value:
@@ -401,7 +401,7 @@ empty list
 Here `first` is an `Int` — the `None` arm never yields a value because it
 exits `summarize` entirely. This idiom is the workhorse of Fable error
 handling when the failure case needs its own logic; when it would just be
-`return`, the `?` operator (chapter 7) says the same thing in one character.
+`return`, the `?` operator (chapter 6) says the same thing in one character.
 `examples/json.fable` uses both. (Assignment stays statement-only: an arm
 that assigns still needs a block body, `Some(v) -> { x = v; }`, and the
 error message says so.)
@@ -455,10 +455,121 @@ linked lists (`enum IntList { Nil, Cons(Int, IntList) }`) or, with a struct
 plus `Option`, mutable nodes: `struct Node { value: Int, next: Option[Node] }`.
 In practice, reach for the built-in `List[T]` first.
 
+## Methods: `impl` blocks
+
+Builtin types have methods — `xs.map(f)`, `s.trim()`. Your own types get
+them from an `impl` block. The first parameter of a method is a bare `self`
+(no annotation — it always has the impl type); everything else is an
+ordinary typed parameter:
+
+```fable
+struct Point { x: Float, y: Float }
+
+impl Point {
+    fn len(self) -> Float {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+
+    fn scaled(self, k: Float) -> Point {
+        Point { x: self.x * k, y: self.y * k }
+    }
+}
+
+let p = Point { x: 3.0, y: 4.0 };
+println(p.len());               // 5.0
+println(p.scaled(2.0).len());   // 10.0
+```
+
+```text
+5.0
+10.0
+```
+
+Methods are just functions whose first argument is the receiver: `p.len()`
+compiles to the same call as `len(p)` would. They are hoisted like
+functions, so order within a file does not matter, and they pair naturally
+with `match` on enums:
+
+```fable
+enum Shape { Circle(Float), Rect(Float, Float), Empty }
+
+impl Shape {
+    fn area(self) -> Float {
+        match self {
+            Shape.Circle(r) -> math.pi * r * r,
+            Shape.Rect(w, h) -> w * h,
+            Shape.Empty -> 0.0,
+        }
+    }
+}
+
+println(Shape.Rect(3.0, 4.0).area());
+```
+
+```text
+12.0
+```
+
+Generic types re-bind their type parameters in the `impl` header, and a
+method may add its own after the type's:
+
+```fable
+struct Pair[A, B] { first: A, second: B }
+
+impl Pair[A, B] {
+    fn swap(self) -> Pair[B, A] {
+        Pair { first: self.second, second: self.first }
+    }
+}
+
+println(Pair { first: 1, second: "one" }.swap().first);   // one
+```
+
+```text
+one
+```
+
+A few rules: multiple `impl` blocks per type are fine, but a method name may
+be defined only once per type. Impl targets must be your own structs or
+enums — `impl Int` or `impl Option` is a compile error, since the builtins
+keep their curated method sets.
+
+## Operator methods
+
+The well-known method names `add`, `sub`, `mul`, `div`, `rem`, and `neg`
+overload the operators themselves. Define `add` on a type and `a + b`
+dispatches to `a.add(b)`:
+
+```fable
+struct V2 { x: Float, y: Float }
+
+impl V2 {
+    fn add(self, o: V2) -> V2 { V2 { x: self.x + o.x, y: self.y + o.y } }
+    fn mul(self, k: Float) -> V2 { V2 { x: self.x * k, y: self.y * k } }
+    fn neg(self) -> V2 { V2 { x: -self.x, y: -self.y } }
+}
+
+let a = V2 { x: 1.0, y: 2.0 };
+let b = V2 { x: 10.0, y: 20.0 };
+let c = a + b * 2.0;            // ordinary precedence: mul before add
+println((-c).x);
+```
+
+```text
+-21.0
+```
+
+Dispatch is on the *left* operand's type, so mixed signatures like
+`vec * scalar` are natural — the parameter and return types are whatever the
+method declares. Two deliberate refusals keep the feature honest: `==` stays
+structural for every type and cannot be overloaded, and `+=` never
+dispatches (write `x = x + y`).
+
 ## Where we are
 
-You can now define the two halves of Fable's data vocabulary — structs
-(named fields, mutable, reference semantics) and enums (immutable tagged
-choices) — make them generic, and take them apart with patterns checked for
-exhaustiveness and reachability. Chapter 7 adds the v0.2 conveniences on
-top: methods in `impl` blocks and `?` for the error paths.
+You can now define your own types — structs (named fields, mutable,
+reference semantics) and enums (immutable tagged choices), both generic —
+give them methods and operators, and take them apart with patterns checked
+for exhaustiveness and reachability. The failure cases you modeled with
+`Option` and `Result` get their own toolkit next: combinators, the `?`
+operator, and catchable panics.

@@ -38,8 +38,7 @@ authors with a double brief: make something interesting, and surface every
 papercut. Each was then verified by a separate reviewer following only its
 README. Their issue reports — deduplicated, triaged, and answered — are in
 [`NOTES.md`](NOTES.md); the fixes they drove became v0.6, and the demos
-were then modernized to use what they'd asked for. The narrative version
-is [book chapter 10](../book/10-field-test.md).
+were then modernized to use what they'd asked for.
 
 The same process ran again for **v0.7**: six new demos built on the
 infrastructure release (Bytes, FFT, workers, bitwise, the std collections)

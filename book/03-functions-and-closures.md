@@ -416,20 +416,49 @@ panic: stack overflow
 elided here.) Like any panic, this exits with code 70.
 
 The limit only applies to calls with work left pending — here every frame
-holds an unfinished `+`. A call in *tail position* (the last thing its
-function does) reuses the frame instead of pushing one, so the accumulator
-version runs at any depth:
+holds an unfinished `+`. A call in *tail position* reuses the current frame
+instead of pushing a new one, so the accumulator version runs at any depth
+in constant stack space:
 
 ```fable
 fn sum_acc(n: Int, acc: Int) -> Int {
     if n == 0 { acc } else { sum_acc(n - 1, acc + n) }
 }
 
-println(sum_acc(1_000_000, 0));   // 500000500000 — constant stack space
+println(sum_acc(1_000_000, 0));   // one frame, a million calls
 ```
 
-Chapter 7 covers tail calls in detail. Ordinary bounded recursion — parsers,
-tree walks, divide-and-conquer — was never in danger either way.
+```text
+500000500000
+```
+
+Tail position is where a call's result immediately becomes its caller's
+result: the operand of `return`, the last expression of a function or lambda
+body, and the result position of an `if`, `match`, or block that is itself
+in tail position. Mutual recursion qualifies — two functions calling each
+other in tail position bounce in a single frame — and so do calls made
+through a function value.
+
+What does *not* qualify is anything with work left to do after the call:
+
+```fable panics
+fn sum_to(n: Int) -> Int {
+    if n == 0 { 0 } else { n + sum_to(n - 1) }   // the `+` runs after the call
+}
+println(sum_to(1_000_000));
+```
+
+```text
+panic: stack overflow
+```
+
+That is the honest outcome — each frame really is holding a pending `+`, so
+each frame really must exist. Rewrite with an accumulator and the optimizer
+takes it from there. Ordinary bounded recursion — parsers, tree walks,
+divide-and-conquer — was never in danger either way; tail calls are what let
+a recursive *loop* (an interpreter's eval, a state machine) run forever in
+constant space. The `dis` disassembler (chapter 10) shows a reused frame as
+`tail_callfn` where an ordinary call is `call_fn`.
 
 ## Where we are
 

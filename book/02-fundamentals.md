@@ -188,6 +188,66 @@ program with a message, a stack trace, and exit code 70 (`panic: division by
 zero`). Integer arithmetic that overflows 64 bits also panics (`panic:
 integer overflow`) rather than silently wrapping.
 
+## Bitwise operators
+
+`Int` also has the bitwise operators — `&`, `|`, `^` (and, or, xor) and the
+shifts `<<`, `>>`. Binary and hex literals make the bit patterns legible:
+
+```fable
+println(0b1010 & 0b0110);   // bits set in both
+println(0b1010 | 0b0101);   // bits set in either
+println(0b1010 ^ 0b1111);   // bits that differ
+println(1 << 4);            // shift left: 1, then 16
+println(240 >> 4);          // shift right
+```
+
+```text
+2
+15
+5
+16
+15
+```
+
+Their precedence follows Rust: the shifts bind tightest, then `&`, then `^`,
+then `|`, and all four sit between the ranges and the arithmetic operators —
+so `x & 0xFF == 0` parses as `(x & 0xFF) == 0`, and `mask & 511` needs no
+parentheses. A shift count outside `0..=63` panics rather than wrapping.
+
+One sharp edge worth meeting early: `>>` is an **arithmetic** shift — it
+copies the sign bit, so a negative number stays negative. When you are
+treating an `Int` as a bag of 64 bits and want zeros shifted in from the
+top, use the `ushr` (unsigned/logical shift right) method instead:
+
+```fable
+println(-8 >> 1);          // arithmetic: sign preserved
+println((-8).ushr(1));     // logical: zeros from the top
+```
+
+```text
+-4
+9223372036854775804
+```
+
+`Int` carries the rest of the bit toolbox as methods: `count_ones()`,
+`leading_zeros()`, `trailing_zeros()`, `rotate_left(n)`/`rotate_right(n)`,
+and `to_hex()` for the two's-complement hex string. A `Set`-of-small-ints as
+a single integer is a common idiom — the sudoku demo keeps each cell's
+candidate digits in a 9-bit mask:
+
+```fable
+let all = (1 << 9) - 1;    // nine ones: digits 1..9
+let used = 0b000010010;    // digits 2 and 5 taken
+let free = all ^ used;     // candidates
+println(all);
+println(free.count_ones());  // how many digits remain
+```
+
+```text
+511
+7
+```
+
 ## Strings: escapes and interpolation
 
 Any expression can be spliced into a string with `{ }`. A literal `{` is

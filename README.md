@@ -2,7 +2,9 @@
 
 Fable is a statically-typed, garbage-collected programming language with
 algebraic data types, exhaustive pattern matching, closures, and generics —
-implemented from scratch in Rust with **zero dependencies**.
+implemented from scratch in Rust with **zero dependencies**. It is designed
+to be written fluently by AI as much as by hand: deterministic, golden-test
+first, and spec-ruled, so a program's behavior is legible and checkable.
 
 ```fable
 enum Shape {
@@ -25,9 +27,9 @@ println("total area: {total.to_fixed(2)}");
 Everything here — lexer, parser, unification-based type inference, Maranget
 exhaustiveness checking, bytecode compiler, stack VM, mark-and-sweep garbage
 collector, REPL, formatter, language server, and disassembler — lives in
-about 18,000 lines of dependency-free Rust in `src/`. It is pinned down by
-262 golden spec tests (every one a runnable Fable program), a book whose 112
-snippets execute in CI, and ten demo programs whose complete output is
+about 21,000 lines of dependency-free Rust in `src/`. It is pinned down by
+294 golden spec tests (every one a runnable Fable program), a book whose 122
+snippets execute in CI, and seventeen demo programs whose complete output is
 golden-tested. This image is Fable output too:
 
 <p align="center">
@@ -71,17 +73,27 @@ golden-tested. This image is Fable output too:
   Lisp loop in constant stack *through* its own eval.
 - **String interpolation.** `"sum = {a + b}"` with arbitrary nested
   expressions — including nested strings with their own interpolations.
-- **Batteries.** 100+ built-in methods across `List`, `Map`, `String`,
-  `Option`, `Result`, `Range`, `Int`, `Float`; `math`/`fs`/`os` namespaces
-  (Result-based and `?`-friendly); and an embedded standard library —
-  `import std.json;` — written in Fable itself: json, flags, path, strings,
-  and lazy iterators.
+- **Systems and binary data.** Bitwise operators (`& | ^ << >>`) and Int
+  intrinsics (`count_ones`, `ushr`, `to_hex`, …), plus a `Bytes` buffer with
+  little- and big-endian pushers and readers for building wire formats,
+  files, and checksums by hand — the `png` and `synthwave` demos write real
+  PNG and WAV.
+- **Parallelism as a first-class citizen.** `worker.spawn` runs a whole
+  Fable program on its own OS thread with its own heap, communicating over
+  string channels — shared-nothing isolates with panic isolation. Plus a
+  native `fft` namespace and a feature-gated `gpu` compute path.
+- **Batteries.** 150+ built-in methods across `List`, `Map`, `String`,
+  `Bytes`, `Option`, `Result`, `Range`, `Int`, `Float`; `math`/`fs`/`os`/`fft`
+  namespaces (Result-based and `?`-friendly); and an embedded standard
+  library — `import std.json;` — written in Fable itself: json, flags, path,
+  strings (with a `Builder`), lazy iterators, and the `set`/`deque`/`lists`
+  collections.
 
 ## The toolchain
 
 - **A test runner.** `fable test dir/` — any `.fable` file with
   `//? expect/error/panic` directives is a golden test; the interpreter's
-  own 262-test suite runs through the same command's code.
+  own 294-test suite runs through the same command's code.
 - **A language server.** `fable lsp` — diagnostics as you type, hover
   types, go-to-definition across modules, and completion that works
   mid-edit. JSON-RPC hand-rolled; still zero dependencies.
@@ -106,22 +118,29 @@ golden-tested. This image is Fable output too:
 - **A real GC, stress-tested.** Tracing mark-and-sweep with checkpoint
   rooting. Run anything with `FABLE_GC_STRESS=1` to collect before *every*
   allocation — the entire test suite passes under it.
-- **An executable book.** All 112 runnable snippets in [`book/`](book/)
+- **An executable book.** All 122 runnable snippets in [`book/`](book/)
   execute in CI — including the deliberate-error demos, verified to fail
   the way the prose says they do.
-- **Ten golden-tested demos.** [`demos/`](demos/) holds a mini-Lisp, a
+- **Seventeen golden-tested demos.** [`demos/`](demos/) holds a mini-Lisp, a
   spreadsheet with cycle detection, a regex engine, a dungeon generator, a
   static site generator, a CSV query language, checkers (a complete 106-ply
   self-play game, every move and node count pinned), an SVG plotter
   (the committed [spirograph](demos/plot/spirograph.svg) is its
-  golden-tested output), a sudoku solver, and wave-function collapse —
-  deterministic, byte-exact, in CI.
-- **A field-tested design.** The demos were written with orders to report
-  every papercut; ten independent authors hit the same dozen walls, and
-  v0.6 is those walls removed — plus one genuine RNG bug their tests
-  caught. The triage ledger (fixed / documented / declined-with-reasons)
-  is [`demos/NOTES.md`](demos/NOTES.md); the story is
-  [book chapter 10](book/10-field-test.md).
+  golden-tested output), a sudoku solver, wave-function collapse, a
+  from-scratch PNG encoder, a chiptune WAV renderer, an FFT chord analyzer, a
+  worker-pool scheduler, an Othello bitboard engine, a Bloom filter, and a
+  parallel Mandelbrot — all deterministic, byte-exact, in CI, normal and
+  under GC stress. The house style they codify is in
+  [`demos/STYLE.md`](demos/STYLE.md).
+- **A field-tested design.** The demos are written with orders to report
+  every papercut; independent authors hit the same walls, and the language
+  removed them — including one genuine RNG bug their tests caught. The triage
+  ledgers (fixed / documented / declined-with-reasons) are in
+  [`demos/NOTES.md`](demos/NOTES.md).
+- **Measured performance.** Every hot path is benchmarked
+  ([`bench/`](bench/)); the efficiency pass cut the heaviest demo's runtime
+  ~15% and string building ~55%, all with byte-identical output. Numbers and
+  method: [`bench/RESULTS.md`](bench/RESULTS.md).
 
 ## Try it
 
@@ -144,7 +163,7 @@ cargo build --release
 ./target/release/fable demos/csvql/main.fable \
   "select city, pop where continent == Asia order by pop desc limit 3"
 
-# Golden-test the spec suite and all ten demos with the built-in runner
+# Golden-test the spec suite and all seventeen demos with the built-in runner
 ./target/release/fable test tests/spec demos
 
 # Poke at the machinery
@@ -238,7 +257,10 @@ src/
   value.rs        heap objects, mark-and-sweep collector
   natives.rs      the built-in function/method implementations
   builtins.rs     their type schemes (shared with the checker)
-  fmt.rs          comment-preserving formatter
+  fft.rs          the native FFT kernel (radix-2 + Bluestein)
+  worker.rs       OS-thread worker isolates and their channels
+  gpu.rs          feature-gated GPU compute (wgpu, behind --features gpu)
+  fmt.rs          comment-preserving, width-aware formatter
   repl.rs         incremental REPL with rollback
   modules.rs      the import loader (dedup, cycles, FABLE_PATH, std)
   testing.rs      the golden-test runner (fable test + the spec suite)
@@ -252,8 +274,11 @@ book/             the Fable book (every snippet runs in CI)
 tests/spec/       golden tests (expect / error / panic directives)
 examples/         mandelbrot, raytracer, game of life, brainfuck,
                   JSON parser, algorithms, a tiny text adventure
-demos/            ten field-test programs (lisp, spreadsheet, regex,
-                  dungeon, mdsite, csvql, checkers, plot, sudoku, wfc)
+demos/            seventeen field-test programs (lisp, checkers, sudoku,
+                  png, synthwave, reversi, swarm, ...) + STYLE.md, NOTES.md
+ports/            transpilation layers + ports (jsl: ICAA; pyl: claudewave)
+bench/            the benchmark harness and results
+CLAUDE.md         project memory: purpose, invariants, release ledger
 ```
 
 ## Testing
@@ -273,23 +298,15 @@ let x: Int = "no";    //? error: type mismatch
 
 ## Status
 
-Fable is a complete, working language built as a demonstration project.
-The spec (`docs/SPEC.md`) is the source of truth; deviations are bugs.
-
-v0.2 delivered everything v0.1 had declared out of scope — user-defined
-methods (`impl` blocks), multi-file modules (`import`), the `?` operator,
-and tail-call optimization. v0.3 made it a real glue language: `pub`
-visibility, operator methods, a `FABLE_PATH` module search path, and
-`fs`/`os` builtins. v0.4 built the toolchain: `fable test`, the embedded
-standard library (including lazy iterators written in Fable itself),
-`fable lsp`, and catchable panics. v0.5 closed the loop: the REPL imports,
-the language server completes, and the book runs in CI.
-
-v0.5 also made a promise: further growth would come from the pull of real
-usage, not the push of a roadmap. v0.6 is that pull, cashed in — ten demo
-programs field-tested the language, and their reports became the release
-(see "The receipts" above, `demos/NOTES.md`, and
-[book chapter 10](book/10-field-test.md)).
+Fable is a complete, working language. The spec (`docs/SPEC.md`) is the
+source of truth; deviations are bugs. It has grown through seven releases —
+the core language and toolchain (v0.1–v0.5), a field-test pass that removed
+the walls real demo programs hit (v0.6), and an infrastructure release that
+added `Bytes`, native FFT, worker isolates, bitwise operators, a GPU path,
+and a standard-library collections layer, then a measured efficiency pass
+over the interpreter (v0.7). Features are pulled in by real use, not pushed
+by a roadmap; the per-release detail is in [`CHANGELOG.md`](CHANGELOG.md),
+and the project's purpose and invariants in [`CLAUDE.md`](CLAUDE.md).
 
 What remains out of scope — full traits, per-field visibility, a package
 manager, a debugger, Windows paths — stays out until real programs demand
