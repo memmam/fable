@@ -261,8 +261,11 @@ jobs:
           # the tag-push trigger — this guard avoids a duplicate draft for a
           # release that already shipped.
           if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "release $TAG already exists; uploading any missing assets"
+            echo "release $TAG already exists; refreshing assets and notes"
             gh release upload "$TAG" "${assets[@]}" --clobber
+            # Re-runs (e.g. once macOS notarization is configured) must also
+            # refresh the body, or a re-cut draft keeps its first notes.
+            gh release edit "$TAG" --notes-file .github/RELEASE_NOTES.md
           else
             gh release create "$TAG" \
               --draft \
