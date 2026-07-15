@@ -62,7 +62,7 @@ impl Set[T] {
     // Every element of either set: `self`'s elements in their insertion
     // order, then `other`'s new ones in theirs. A new set; operands untouched.
     pub fn union(self, other: Set[T]) -> Set[T] {
-        let out = from_list(self.to_list());
+        let out = Set { items: self.items.clone() };
         for v in other.to_list() {
             out.insert(v);
         }
