@@ -1,0 +1,44 @@
+// Bench: std.json parse + stringify round-trips on a synthesized document.
+import std.json;
+import std.strings;
+
+// Build a deterministic ~40KB JSON text: an array of small objects.
+fn make_doc() -> String {
+    let b = strings.builder();
+    b.push("[");
+    let mut i = 0;
+    while i < 300 {
+        if i > 0 {
+            b.push(",");
+        }
+        b.push("\{\"id\":");
+        b.push(str(i));
+        b.push(",\"name\":\"item-");
+        b.push(str(i * 7 % 100));
+        b.push("\",\"tags\":[\"a\",\"b\\n\",\"c-");
+        b.push(str(i % 13));
+        b.push("\"],\"score\":");
+        b.push(str(i.to_float() * 1.5 + 0.25));
+        b.push(",\"ok\":");
+        b.push(if i % 3 == 0 { "true" } else { "false" });
+        b.push(",\"note\":null}");
+        i += 1;
+    }
+    b.push("]");
+    b.build()
+}
+
+let text = make_doc();
+let mut parsed = 0;
+let mut round = "";
+let mut k = 0;
+while k < 40 {
+    let doc = json.parse(text).unwrap();
+    parsed += doc.len();
+    round = json.stringify(doc);
+    k += 1;
+}
+let again = json.parse(round).unwrap();
+let name = again.at(299).unwrap().get("name").unwrap().as_str().unwrap();
+println("{text.len()} {round.len()} {parsed} {again.len()}");
+println(name);

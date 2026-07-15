@@ -79,144 +79,194 @@ impl Json {
 }
 
 // ---- parsing ----
+//
+// The parser walks the text's UTF-8 bytes (all JSON structure is ASCII;
+// non-ASCII appears only inside strings, whose bytes are copied through
+// verbatim). Error positions are character indices — like every string
+// index in Fable — recovered from the byte offset only on error paths.
 
 struct Parser {
-    chars: List[String],
-    pos: Int,
+    b: Bytes, // the text's UTF-8
+    pos: Int, // byte offset
+    len: Int,
 }
 
-fn peek(p: Parser) -> Option[String] {
-    p.chars.get(p.pos)
+// The character index of byte offset `i`: the number of UTF-8 lead bytes
+// before it. Cold — used only when building an error message.
+fn char_pos(p: Parser, i: Int) -> Int {
+    let mut n = 0;
+    let mut k = 0;
+    while k < i {
+        if (p.b.get(k) & 192) != 128 {
+            n += 1;
+        }
+        k += 1;
+    }
+    n
 }
 
-fn advance(p: Parser) -> Option[String] {
-    let c = p.chars.get(p.pos);
-    p.pos += 1;
-    c
+// The character starting at lead byte `i`, for error messages.
+fn char_at(p: Parser, i: Int) -> String {
+    let b0 = p.b.get(i);
+    let w = if b0 < 128 { 1 } else if b0 < 224 { 2 } else if b0 < 240 { 3 } else { 4 };
+    p.b.slice(i, i + w).utf8().unwrap()
+}
+
+fn peek_byte(p: Parser) -> Int {
+    if p.pos < p.len { p.b.get(p.pos) } else { -1 }
 }
 
 fn skip_ws(p: Parser) {
-    while true {
-        match peek(p) {
-            Some(c) -> {
-                if c == " " || c == "\n" || c == "\t" || c == "\r" {
-                    p.pos += 1;
-                } else {
-                    return;
-                }
-            }
-            None -> { return; }
+    while p.pos < p.len {
+        let c = p.b.get(p.pos);
+        if c == 32 || c == 10 || c == 9 || c == 13 {
+            p.pos += 1;
+        } else {
+            return;
         }
     }
 }
 
-fn expect(p: Parser, want: String) -> Result[Unit, String] {
-    match advance(p) {
-        Some(c) -> if c == want { Ok(()) } else { Err("expected '{want}', found '{c}' at {p.pos}") },
-        None -> Err("expected '{want}', found end of input"),
+// Consume one byte, requiring the ASCII char `want` (`wname` is its
+// spelling for the error message).
+fn expect(p: Parser, want: Int, wname: String) -> Result[Unit, String] {
+    if p.pos >= p.len {
+        return Err("expected '{wname}', found end of input");
+    }
+    let c = p.b.get(p.pos);
+    p.pos += 1;
+    if c == want {
+        Ok(())
+    } else {
+        Err("expected '{wname}', found '{char_at(p, p.pos - 1)}' at {char_pos(p, p.pos)}")
     }
 }
 
 fn parse_value(p: Parser) -> Result[Json, String] {
     skip_ws(p);
-    match peek(p) {
-        None -> Err("unexpected end of input"),
-        Some(c) -> {
-            if c == "\{" { parse_object(p) }
-            else if c == "[" { parse_array(p) }
-            else if c == "\"" { parse_string(p).map(|s| Json.JStr(s)) }
-            else if c == "t" || c == "f" { parse_bool(p) }
-            else if c == "n" { parse_literal(p, "null", Json.JNull) }
-            else { parse_number(p) }
-        }
+    let c = peek_byte(p);
+    if c < 0 {
+        return Err("unexpected end of input");
     }
+    if c == 123 { parse_object(p) }        // {
+    else if c == 91 { parse_array(p) }     // [
+    else if c == 34 { parse_string(p).map(|s| Json.JStr(s)) }
+    else if c == 116 || c == 102 { parse_bool(p) } // t / f
+    else if c == 110 { parse_literal(p, "null", Json.JNull) } // n
+    else { parse_number(p) }
 }
 
 fn parse_literal(p: Parser, word: String, value: Json) -> Result[Json, String] {
-    for ch in word {
-        match advance(p) {
-            Some(c) -> if c != ch { return Err("invalid literal at {p.pos}"); },
-            None -> { return Err("unexpected end of input"); }
+    let w = word.to_bytes();
+    let n = w.len();
+    let mut k = 0;
+    while k < n {
+        if p.pos >= p.len {
+            return Err("unexpected end of input");
         }
+        let c = p.b.get(p.pos);
+        p.pos += 1;
+        if c != w.get(k) {
+            return Err("invalid literal at {char_pos(p, p.pos)}");
+        }
+        k += 1;
     }
     Ok(value)
 }
 
 fn parse_bool(p: Parser) -> Result[Json, String] {
-    match peek(p) {
-        Some(c) -> if c == "t" {
-            parse_literal(p, "true", Json.JBool(true))
-        } else {
-            parse_literal(p, "false", Json.JBool(false))
-        },
-        None -> Err("unexpected end of input"),
+    if peek_byte(p) == 116 {
+        parse_literal(p, "true", Json.JBool(true))
+    } else {
+        parse_literal(p, "false", Json.JBool(false))
     }
 }
 
 fn parse_number(p: Parser) -> Result[Json, String] {
     let start = p.pos;
-    let digits = "0123456789+-.eE";
-    let mut running = true;
-    while running {
-        match peek(p) {
-            Some(c) -> if digits.contains(c) { p.pos += 1; } else { running = false; },
-            None -> { running = false; }
+    while p.pos < p.len {
+        let c = p.b.get(p.pos);
+        // 0-9 + - . e E
+        if (c >= 48 && c <= 57) || c == 43 || c == 45 || c == 46 || c == 101 || c == 69 {
+            p.pos += 1;
+        } else {
+            break;
         }
     }
-    let text = p.chars.slice(start, p.pos).join("");
+    let text = p.b.slice(start, p.pos).utf8().unwrap(); // ASCII bytes only
     match text.parse_float() {
         Some(f) -> Ok(Json.JNum(f)),
-        None -> Err("invalid number '{text}' at {start}"),
+        None -> Err("invalid number '{text}' at {char_pos(p, start)}"),
     }
 }
 
-fn parse_string(p: Parser) -> Result[String, String] {
-    expect(p, "\"")?;
-    let mut out = "";
-    while true {
-        match advance(p) {
-            None -> { return Err("unterminated string"); }
-            Some(c) -> {
-                if c == "\"" { return Ok(out); }
-                if c == "\\" {
-                    match advance(p) {
-                        Some(esc) -> {
-                            if esc == "n" { out += "\n"; }
-                            else if esc == "t" { out += "\t"; }
-                            else if esc == "\"" { out += "\""; }
-                            else if esc == "\\" { out += "\\"; }
-                            else if esc == "/" { out += "/"; }
-                            else { return Err("unsupported escape \\{esc}"); }
-                        }
-                        None -> { return Err("unterminated escape"); }
-                    }
-                } else {
-                    out += c;
-                }
-            }
+// First index at or after `pos` holding '"' or '\' (or the end): the bytes
+// before it are a plain run that copies through verbatim.
+fn scan_plain(p: Parser) -> Int {
+    let mut i = p.pos;
+    while i < p.len {
+        let c = p.b.get(i);
+        if c == 34 || c == 92 {
+            return i;
         }
+        i += 1;
     }
-    Ok(out)
+    i
+}
+
+fn parse_string(p: Parser) -> Result[String, String] {
+    expect(p, 34, "\"")?;
+    let out = bytes(0);
+    while true {
+        let stop = scan_plain(p);
+        if stop > p.pos {
+            out.push_bytes(p.b.slice(p.pos, stop));
+            p.pos = stop;
+        }
+        if p.pos >= p.len {
+            return Err("unterminated string");
+        }
+        let c = p.b.get(p.pos);
+        p.pos += 1;
+        if c == 34 {
+            // The buffer holds whole input chars plus ASCII escapes, so
+            // the decode cannot fail.
+            return Ok(out.utf8().unwrap());
+        }
+        // c is '\': an escape follows.
+        if p.pos >= p.len {
+            return Err("unterminated escape");
+        }
+        let esc = p.b.get(p.pos);
+        p.pos += 1;
+        if esc == 110 { out.push(10); }        // \n
+        else if esc == 116 { out.push(9); }    // \t
+        else if esc == 34 { out.push(34); }    // \"
+        else if esc == 92 { out.push(92); }    // \\
+        else if esc == 47 { out.push(47); }    // \/
+        else { return Err("unsupported escape \\{char_at(p, p.pos - 1)}"); }
+    }
+    Err("unterminated string")
 }
 
 fn parse_array(p: Parser) -> Result[Json, String] {
     p.pos += 1; // consume [
     let mut items = [];
     skip_ws(p);
-    if peek(p) == Some("]") {
+    if peek_byte(p) == 93 { // ]
         p.pos += 1;
         return Ok(Json.JArr(items));
     }
     while true {
         items.push(parse_value(p)?);
         skip_ws(p);
-        match advance(p) {
-            Some(c) -> {
-                if c == "]" { return Ok(Json.JArr(items)); }
-                if c != "," { return Err("expected ',' or ']' at {p.pos}"); }
-            }
-            None -> { return Err("unterminated array"); }
+        if p.pos >= p.len {
+            return Err("unterminated array");
         }
+        let c = p.b.get(p.pos);
+        p.pos += 1;
+        if c == 93 { return Ok(Json.JArr(items)); }
+        if c != 44 { return Err("expected ',' or ']' at {char_pos(p, p.pos)}"); }
     }
     Ok(Json.JArr(items))
 }
@@ -225,7 +275,7 @@ fn parse_object(p: Parser) -> Result[Json, String] {
     p.pos += 1; // consume {
     let mut entries = [];
     skip_ws(p);
-    if peek(p) == Some("}") {
+    if peek_byte(p) == 125 { // }
         p.pos += 1;
         return Ok(Json.JObj(entries));
     }
@@ -233,26 +283,27 @@ fn parse_object(p: Parser) -> Result[Json, String] {
         skip_ws(p);
         let key = parse_string(p)?;
         skip_ws(p);
-        expect(p, ":")?;
+        expect(p, 58, ":")?;
         entries.push((key, parse_value(p)?));
         skip_ws(p);
-        match advance(p) {
-            Some(c) -> {
-                if c == "}" { return Ok(Json.JObj(entries)); }
-                if c != "," { return Err("expected ',' or '}' at {p.pos}"); }
-            }
-            None -> { return Err("unterminated object"); }
+        if p.pos >= p.len {
+            return Err("unterminated object");
         }
+        let c = p.b.get(p.pos);
+        p.pos += 1;
+        if c == 125 { return Ok(Json.JObj(entries)); }
+        if c != 44 { return Err("expected ',' or '}' at {char_pos(p, p.pos)}"); }
     }
     Ok(Json.JObj(entries))
 }
 
 pub fn parse(text: String) -> Result[Json, String] {
-    let p = Parser { chars: text.chars(), pos: 0 };
+    let b = text.to_bytes();
+    let p = Parser { b: b, pos: 0, len: b.len() };
     let json = parse_value(p)?;
     skip_ws(p);
-    if p.pos < p.chars.len() {
-        Err("trailing input at {p.pos}")
+    if p.pos < p.len {
+        Err("trailing input at {char_pos(p, p.pos)}")
     } else {
         Ok(json)
     }
@@ -260,8 +311,12 @@ pub fn parse(text: String) -> Result[Json, String] {
 
 // ---- serialization ----
 
+fn escape(s: String) -> String {
+    s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t")
+}
+
 fn quote(s: String) -> String {
-    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t") + "\""
+    "\"" + escape(s) + "\""
 }
 
 fn num_str(f: Float) -> String {
@@ -274,14 +329,48 @@ fn num_str(f: Float) -> String {
 
 // Compact single-line form.
 pub fn stringify(j: Json) -> String {
+    let out = bytes(0);
+    write_value(out, j);
+    out.utf8().unwrap()
+}
+
+fn write_value(out: Bytes, j: Json) {
     match j {
-        Json.JNull -> "null",
-        Json.JBool(b) -> str(b),
-        Json.JNum(f) -> num_str(f),
-        Json.JStr(s) -> quote(s),
-        Json.JArr(items) -> "[" + items.map(|v| stringify(v)).join(",") + "]",
-        Json.JObj(entries) ->
-            "\{" + entries.map(|e| quote(e.0) + ":" + stringify(e.1)).join(",") + "}",
+        Json.JNull -> out.push_str("null"),
+        Json.JBool(b) -> out.push_str(if b { "true" } else { "false" }),
+        Json.JNum(f) -> out.push_str(num_str(f)),
+        Json.JStr(s) -> {
+            out.push(34);
+            out.push_str(escape(s));
+            out.push(34);
+        }
+        Json.JArr(items) -> {
+            out.push(91); // [
+            let mut first = true;
+            for v in items {
+                if !first {
+                    out.push(44); // ,
+                }
+                first = false;
+                write_value(out, v);
+            }
+            out.push(93); // ]
+        }
+        Json.JObj(entries) -> {
+            out.push(123); // {
+            let mut first = true;
+            for e in entries {
+                if !first {
+                    out.push(44); // ,
+                }
+                first = false;
+                out.push(34);
+                out.push_str(escape(e.0));
+                out.push_str("\":");
+                write_value(out, e.1);
+            }
+            out.push(125); // }
+        }
     }
 }
 
