@@ -14,6 +14,7 @@
 //   np.array([...])                    nd.of([...])   (mono; of2 = stereo)
 //   np.arange(n).astype(float)         nd.arange(n)
 //   np.linspace(a, b, n)               nd.linspace(a, b, n)
+//   np.geomspace(a, b, n)              nd.geomspace(a, b, n)
 //   x + y  (same shape)                x + y      (also - * /; panics on mismatch)
 //   x + k / x * k / x / k              x.adds(k) / x.muls(k) / x.divs(k)
 //   k - x                              x.k_minus(k)
@@ -93,6 +94,24 @@ pub fn linspace(a: Float, b: Float, n: Int) -> Nd {
     if n == 1 { return Nd { ch: 1, data: [a] }; }
     let step = (b - a) / (n - 1).to_float();
     let data = (0..n).map(|i| a + i.to_float() * step);
+    data[n - 1] = b;
+    Nd { ch: 1, data }
+}
+
+// numpy semantics: 10^linspace(log10(a), log10(b), n) with both
+// endpoints forced exactly (the shim's formula, digit for digit);
+// n==1 -> [a]; n==0 -> empty; a, b must be positive.
+pub fn geomspace(a: Float, b: Float, n: Int) -> Nd {
+    if a <= 0.0 || b <= 0.0 {
+        panic("pyl.nd: geomspace: endpoints must be positive, got ({a}, {b})");
+    }
+    if n <= 0 { return Nd { ch: 1, data: [] }; }
+    if n == 1 { return Nd { ch: 1, data: [a] }; }
+    let l0 = math.log10(a);
+    let l1 = math.log10(b);
+    let step = (l1 - l0) / (n - 1).to_float();
+    let data = (0..n).map(|i| math.pow(10.0, l0 + i.to_float() * step));
+    data[0] = a;
     data[n - 1] = b;
     Nd { ch: 1, data }
 }
