@@ -911,6 +911,21 @@ A struct-literal field is `IDENT ":" expr` or the shorthand `IDENT` — § 2.3.)
   checked types, go-to-definition across module files, and completion
   (v0.5) for methods, fields, module members, namespaces, and top-level
   names — answered from the last good analysis, so it works mid-edit.
+- `fable build <dir|file.fable> [-o OUT] [--launcher PATH]` (v0.7) — pack a
+  program into one self-contained executable. Every file under the program's
+  directory is stapled onto a copy of the interpreter — appended after its
+  image as `payload ‖ u64(payload_len) ‖ "FABLZOO1"`, a dependency-free
+  little-endian archive — and the program is type-checked first, so a build
+  never ships a binary that fails to compile. On startup such a binary reads
+  its own 16-byte trailer, and if the magic is present unpacks the payload
+  into a per-process scratch directory, makes it the working directory, and
+  runs the entry (`main.fable`); an ordinary `fable` has no trailer and is
+  unaffected. Files are packed under the path *as given*, so a stapled binary
+  behaves exactly like `fable <that path>` run from the build directory —
+  imports, `fs.*`, `worker.spawn`, and output are all identical. `--launcher`
+  supplies interpreter bytes cross-compiled for another target (stapling is
+  host-independent, so one machine can assemble binaries for every target);
+  `-o` sets the output path (default: the program directory's name).
 - `fable repl` — interactive REPL; expressions print their value (in `str` form,
   except `String` values print quoted) unless the value is `()`. Imports
   work (v0.5) and persist across inputs.

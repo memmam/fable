@@ -44,6 +44,44 @@ when it can't, composing outermost-first. Because it works from the parsed
 syntax and never from the original whitespace, `fmt` is idempotent:
 formatting formatted code changes nothing.
 
+## `fable build` — one program, one binary
+
+`fable build` turns a whole program into a single self-contained executable.
+Point it at a directory whose entry is `main.fable` (or at a `.fable` file
+directly):
+
+```sh
+fable build demos/png -o png     # staple the program into ./png
+./png                            # run it — no fable, no source tree needed
+```
+
+The binary carries everything the program touches: its imported modules, the
+data files it reads, and the separate `.fable` files it hands to
+`worker.spawn`. There is no code generation involved — the program's files
+are *stapled* onto a copy of the interpreter (appended after its image, which
+the binary finds by reading its own tail at startup), and unpacked into a
+scratch directory the moment it runs. That is why the zero-dependency
+promise survives: a stapled binary is just `fable` with a payload glued on.
+
+The contract is simple to hold in your head: **a stapled binary behaves
+exactly like `fable <the path you built>` run from the directory you built
+it in.** Relative paths resolve the same way, workers spawn the same way,
+output is byte-for-byte the same. Building `demos/png` and running the result
+prints precisely what `fable demos/png/main.fable` prints.
+
+One binary is per-target. To ship for machines you are not sitting at, build
+the interpreter for another target and hand it to `build` as the launcher:
+
+```sh
+# staple the same program onto a launcher cross-compiled for another target
+fable build demos/png --launcher ./fable-aarch64-macos -o png-macos
+```
+
+Because stapling is just byte concatenation, one host can assemble binaries
+for every target it has a launcher for — which is exactly how the release
+"demo zoo" is produced: each demo, cross-built for Linux, Windows, and macOS,
+all from one runner.
+
 ## `fable lsp`
 
 The checker already knows every type and every definition site; `fable lsp`

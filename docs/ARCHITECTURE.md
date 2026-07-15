@@ -368,6 +368,21 @@ worker's panic is caught at its thread boundary and returned as an `Err` from
 `join`. Worker `println` output is routed through a shared sink so the
 golden-test harness can capture it.
 
+**bundle.rs** packs a program into a self-contained binary for `fable build`.
+It serializes every file under the program's directory into a
+dependency-free little-endian archive and `staple`s it onto interpreter bytes
+as `payload ‖ u64(len) ‖ MAGIC`; the launcher entry in `main.rs`
+(`run_bundle`) calls `read_self`, which seeks to the executable's last 16
+bytes and, only if the magic matches, reads back the payload — so an ordinary
+`fable` pays one 16-byte read and nothing else. A present bundle is extracted
+into a per-process scratch directory that becomes the working directory, then
+the normal file-path runner takes over: because files are packed under the
+path *as given* to `build`, imports, `fs.*`, and `worker.spawn` all resolve
+against the unpacked tree with no special-casing anywhere in the loader or the
+VM. Extraction refuses absolute or `..` paths. Because stapling is pure byte
+concatenation and target-independent, `--launcher` lets one host assemble
+binaries for every cross-compiled target (the release "demo zoo").
+
 **The efficiency pass** rewrote the interpreter's hot paths against a
 benchmark harness (`bench/`, results in `bench/RESULTS.md`): dispatch-loop
 state hoisted into `run()` locals, write-in-place stack traffic,

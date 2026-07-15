@@ -44,6 +44,17 @@ jobs:
           ./target/release/fable test tests/spec > /dev/null
       - name: Demo golden tests
         run: ./target/release/fable test demos > /dev/null
+      - name: Self-contained demo binary (fable build)
+        # Staple a data-reading demo and a worker demo into standalone
+        # binaries and prove each reproduces its source run byte-for-byte
+        # from an unrelated working directory.
+        run: |
+          for demo in csvql parmandel; do
+            ./target/release/fable build "demos/$demo" -o "/tmp/$demo-bin"
+            ( cd /tmp && "/tmp/$demo-bin" ) > "/tmp/$demo-bin.out"
+            ./target/release/fable "demos/$demo/main.fable" > "/tmp/$demo-src.out"
+            diff "/tmp/$demo-src.out" "/tmp/$demo-bin.out"
+          done
       - name: FFT numpy cross-check
         run: |
           python3 -m pip install --quiet numpy

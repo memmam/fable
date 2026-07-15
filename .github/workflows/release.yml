@@ -8,9 +8,16 @@ name: Release
 #     name — the release-by-pull-request path, for actors whose access
 #     is branch-scoped (a PR is the only ref they can move).
 # In the latter two, `gh release create` mints the tag at the built
-# commit as part of drafting the release. Every path rebuilds the
-# release binary and re-runs the full validation suite against the
-# exact released revision first.
+# commit as part of drafting the release.
+#
+# The `build` matrix cross-compiles the interpreter for five desktop
+# targets and, on each, staples every demo into a self-contained binary
+# (the "demo zoo") with `fable build`. Stapling is host-independent byte
+# work — a host `fable` reads the target launcher from a file — so the
+# whole zoo for a target is assembled on that target's runner without
+# ever executing the cross-built binary. The x86_64-linux job also runs
+# the full validation suite; if it fails, its artifacts are never
+# uploaded and the release step refuses to draft.
 
 on:
   push:
@@ -27,11 +34,131 @@ permissions:
   contents: write
 
 jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: x86_64-linux
+            ext: ""
+            validate: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            label: aarch64-linux
+            ext: ""
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: x86_64-windows
+            ext: ".exe"
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            label: aarch64-windows
+            ext: ".exe"
+          - os: macos-14
+            target: aarch64-apple-darwin
+            label: aarch64-macos
+            ext: ""
+            codesign: true
+    env:
+      TAG: pending
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            TAG="$(head -1 .github/RELEASE_TAG | tr -d '[:space:]')"
+          else
+            TAG="$GITHUB_REF_NAME"
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "releasing $TAG for ${{ matrix.label }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cross linker (aarch64 linux)
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Build host stapler
+        # A host-runnable `fable` to run `fable build` on this runner. On a
+        # native-arch target this is redundant with the launcher, but keeping
+        # the step uniform across native and cross targets is worth the few
+        # extra seconds.
+        run: cargo build --release
+
+      - name: Build target launcher
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Validate (x86_64-linux only)
+        if: matrix.validate
+        run: |
+          cargo test
+          cargo clippy --all-targets -- -D warnings
+          ./target/release/fable test tests/spec demos > /dev/null
+
+      - name: Assemble the demo zoo
+        shell: bash
+        run: |
+          host="target/release/fable"
+          launcher="target/${{ matrix.target }}/release/fable${{ matrix.ext }}"
+          mkdir -p zoo
+          for d in demos/*/; do
+            name="$(basename "$d")"
+            [ -f "${d}main.fable" ] || continue
+            "$host" build "demos/$name" --launcher "$launcher" -o "zoo/${name}${{ matrix.ext }}"
+          done
+          # Stapling appends bytes after the Mach-O image, which invalidates
+          # the linker's ad-hoc signature; arm64 macOS refuses to run an
+          # unsigned/tampered binary, so re-sign each one ad-hoc.
+          if [ "${{ matrix.codesign }}" = "true" ]; then
+            for b in zoo/*; do codesign --force --sign - "$b"; done
+          fi
+          cp demos/README.md LICENSE NOTICE zoo/
+          ls -l zoo
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist stage
+          # The plain interpreter.
+          cp "target/${{ matrix.target }}/release/fable${{ matrix.ext }}" stage/
+          cp LICENSE NOTICE README.md stage/
+          tar -C stage -czf "dist/fable-${TAG}-${{ matrix.label }}.tar.gz" .
+          # The demo zoo.
+          tar -C zoo -czf "dist/fable-demozoo-${TAG}-${{ matrix.label }}.tar.gz" .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: dist/*
+          if-no-files-found: error
+
   draft-release:
     name: Draft release
+    needs: build
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Resolve tag
         env:
           EVENT: ${{ github.event_name }}
@@ -45,33 +172,35 @@ jobs:
             TAG="$GITHUB_REF_NAME"
           fi
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "releasing $TAG"
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build and validate
-        run: |
-          cargo build --release
-          cargo test
-          ./target/release/fable test tests/spec demos > /dev/null
-      - name: Package binary
-        run: |
-          mkdir -p dist
-          cp target/release/fable dist/
-          cp LICENSE NOTICE README.md dist/
-          tar -C dist -czf "fable-${TAG}-x86_64-linux.tar.gz" .
-      - name: Create draft release
+
+      - name: Gather built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
-        # Publishing a draft creates the tag as a real user, which re-fires
-        # the tag-push trigger — without this guard that mints a duplicate
-        # draft for a release that already shipped.
         run: |
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "release $TAG already exists; skipping"
-            exit 0
+          # The x86_64-linux job carries validation; if it failed, its
+          # artifacts are absent and we must not draft a release.
+          if [ ! -f "artifacts/release-x86_64-linux/fable-${TAG}-x86_64-linux.tar.gz" ]; then
+            echo "x86_64-linux artifacts missing (validation failed?); refusing to draft" >&2
+            exit 1
           fi
-          gh release create "$TAG" \
-            --draft \
-            --target "$GITHUB_SHA" \
-            --title "Fable $TAG" \
-            --notes-file .github/RELEASE_NOTES.md \
-            "fable-${TAG}-x86_64-linux.tar.gz"
+          mapfile -t assets < <(find artifacts -type f -name '*.tar.gz' | sort)
+          echo "assets to attach:"; printf '  %s\n' "${assets[@]}"
+          # Publishing a draft creates the tag as a real user, which re-fires
+          # the tag-push trigger — this guard avoids a duplicate draft for a
+          # release that already shipped.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG already exists; uploading any missing assets"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "Fable $TAG" \
+              --notes-file .github/RELEASE_NOTES.md \
+              "${assets[@]}"
+          fi
