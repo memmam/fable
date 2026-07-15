@@ -3,22 +3,26 @@
 //
 //   FABLE_PATH=ports fable test ports/pyl/spec.fable
 //
-// (Not via `fable test ports` — CLI mains under ports/ exit when run
-// without arguments.) Also passes under FABLE_GC_STRESS=1.
+// (Not via `fable test ports` or `fable test ports/pyl` — CLI mains
+// under ports/ exit when run without arguments, and check_freeze.fable
+// is a report-printing checker program, not a golden test.) Also passes
+// under FABLE_GC_STRESS=1.
 //
-// The butter coefficient lines pinned below were cross-validated against
-// an independent stdlib-Python implementation of the contract's pinned
-// algorithm, steps 1-5 (max relative difference 6.7e-16 over all
-// sections of four designs: low2-0.2, low3-0.1, band2-200-2500-22050,
-// band3-0.1-0.3); low2-0.2 also agrees digit-for-digit with scipy's
-// butter(2, 0.2, output='sos').
+// The butter coefficient lines pinned below use the freeze's design-id
+// format; the three that name designs from the authoritative freeze
+// (ports/claudewave/reference/sos_freeze.txt) reproduce those lines.
+// The full 33-design freeze is verified by ports/pyl/check_freeze.fable
+// (run it from the repo root); butter,2,lowpass,0.2 also agrees
+// digit-for-digit with scipy's butter(2, 0.2, output='sos').
 
 import pyl.nd;
 import pyl.signal;
 import pyl.rand;
 import pyl.audio;
 
-let tmp = "/tmp/claude-0/-home-user-fable/4bdccfad-c698-5791-b6b7-13ba3d2113cf/scratchpad";
+// Scratch files land in TMPDIR (or /tmp) so the suite runs anywhere — CI
+// has no session scratchpad.
+let tmp = os.env("TMPDIR").unwrap_or("/tmp");
 
 // cascade gain at z = 1 (DC) and z = -1 (Nyquist)
 fn dc_gain(sos: List[signal.Sos]) -> Float {
@@ -50,6 +54,17 @@ println(nd.linspace(1.0, 2.0, 0).data.len());                //? expect: 0
 let ls = nd.linspace(0.0, 0.1, 7);
 println("{ls.data[6] == 0.1} {ls.data[1]} {ls.data[5]}");    //? expect: true 0.016666666666666666 0.08333333333333333
 println(str(nd.linspace(1.0, 0.0, 5).data));                 //? expect: [1.0, 0.75, 0.5, 0.25, 0.0]
+
+// geomspace: numpy semantics — log-spaced, endpoints forced exactly
+let gs = nd.geomspace(1.0, 8.0, 4);
+println("{gs.data[0] == 1.0} {gs.data[3] == 8.0} {gs.data[1]} {gs.data[2]}");  //? expect: true true 2.0 4.0
+println(str(nd.geomspace(3.0, 5.0, 1).data));                //? expect: [3.0]
+println(nd.geomspace(1.0, 2.0, 0).data.len());               //? expect: 0
+println(str(try(|| nd.geomspace(0.0, 5.0, 3))));             //? expect: Err("pyl.nd: geomspace: endpoints must be positive, got (0.0, 5.0)")
+// the vocoder's band edges: geomspace(80, 9000, 19)/11025 must equal the
+// Wn values recorded in the freeze's design ids (digit for digit)
+let edges = nd.geomspace(80.0, 9000.0, 19).divs(11025.0);
+println("{edges.data[1]} {edges.data[2]} {edges.data[17]} {edges.data[18]}");  //? expect: 0.00943331434830922 0.012263578762800422 0.6279296543916446 0.8163265306122449
 
 // ---- nd: elementwise operators and shape checks -------------------------
 
@@ -168,32 +183,45 @@ let low2 = signal.butter(2, 0.2, 0.0, "low");
 let low3 = signal.butter(3, 0.1, 0.0, "low");
 let band2 = signal.butter(2, 200.0 / 11025.0, 2500.0 / 11025.0, "band");
 let band3 = signal.butter(3, 0.1, 0.3, "band");
-println("{low2.len()} {low3.len()} {band2.len()} {band3.len()}");  //? expect: 1 2 2 3
+let high3 = signal.butter(3, 8500.0 / 11025.0, 0.0, "high");
+let band4 = signal.butter(4, 0.1, 0.3, "band");
+println("{low2.len()} {low3.len()} {band2.len()} {band3.len()} {high3.len()} {band4.len()}");  //? expect: 1 2 2 3 2 4
 
-// frozen coefficients (freeze format: <design-id> b0 b1 b2 1 a1 a2)
-signal.print_freeze("low2-0.2", low2);
-//? expect: low2-0.2 0.0674552738890719 0.1349105477781438 0.0674552738890719 1 -1.142980502539901 0.4128015980961885
+// frozen coefficients (freeze format: <design-id> b0 b1 b2 1.0 a1 a2).
+// The first three designs appear in sos_freeze.txt under these exact
+// ids; the pinned lines below reproduce the frozen ones.
+signal.print_freeze("butter,2,lowpass,0.2", low2);
+//? expect: butter,2,lowpass,0.2 0.0674552738890719 0.1349105477781438 0.0674552738890719 1.0 -1.1429805025399011 0.41280159809618877
+signal.print_freeze("butter,3,highpass,0.7709750566893424", high3);
+//? expect: butter,3,highpass,0.7709750566893424 0.025478128088662906 -0.05095625617732581 0.025478128088662906 1.0 0.45336245320832447 0.0
+//? expect: butter,3,highpass,0.7709750566893424 1.0 -1.0 0.0 1.0 1.131448192339039 0.5043187093856503
+signal.print_freeze("butter,2,bandpass,0.05,0.625", signal.butter(2, 0.05, 0.625, "band"));
+//? expect: butter,2,bandpass,0.05,0.625 0.3654502711939664 0.7309005423879328 0.3654502711939664 1.0 0.4185232826407624 0.2305164075814236
+//? expect: butter,2,bandpass,0.05,0.625 1.0 -2.0 1.0 1.0 -1.7786694712902813 0.8031379293131992
+// order-3 low is not in the freeze; pinned here (note scipy's pairing:
+// the real-pole section is emitted first and carries the overall gain)
 signal.print_freeze("low3-0.1", low3);
-//? expect: low3-0.1 0.00289819463372143 0.00579638926744286 0.00289819463372143 1 -1.6475522157039908 0.7323389172728035
-//? expect: low3-0.1 1.0 1.0 0.0 1 -0.726542528005361 0.0
-signal.print_freeze("band2-200-2500-22050", band2);
-//? expect: band2-200-2500-22050 0.0723951919319448 0.0 -0.0723951919319448 1 -1.9210226052392076 0.924602894995418
-//? expect: band2-200-2500-22050 1.0 0.0 -1.0 1 -1.1218318290277036 0.43009206700246416
+//? expect: low3-0.1 0.00289819463372143 0.00579638926744286 0.00289819463372143 1.0 -0.726542528005361 0.0
+//? expect: low3-0.1 1.0 1.0 0.0 1.0 -1.647552215703991 0.7323389172728038
 
 // order-2 low: DC gain across the cascade == 1 (to 1e-9); Nyquist gain 0
 println(dc_gain(low2).to_fixed(9));                          //? expect: 1.000000000
 println(dc_gain(low3).to_fixed(9));                          //? expect: 1.000000000
 println(nyq_gain(low2).to_fixed(9));                         //? expect: 0.000000000
-// order-2/3 band at 200-2500/22050 and 0.1-0.3: DC gain == 0
+// order-2/3/4 band at 200-2500/22050 and 0.1-0.3: DC gain == 0
 println(dc_gain(band2).to_fixed(9));                         //? expect: 0.000000000
 println(dc_gain(band3).to_fixed(9));                         //? expect: 0.000000000
 println(nyq_gain(band2).to_fixed(9));                        //? expect: 0.000000000
+println(dc_gain(band4).to_fixed(9));                         //? expect: 0.000000000
+// order-3 high at 8500/11025: DC gain == 0, Nyquist gain == 1
+println(dc_gain(high3).to_fixed(9));                         //? expect: 0.000000000
+println(nyq_gain(high3).to_fixed(9));                        //? expect: 1.000000000
 
 // step response of the order-2 low settles to the DC gain
 let step = signal.sosfilt(low2, nd.ones(50));
 println(step.data[49].to_fixed(6));                          //? expect: 1.000000
 
-println(str(try(|| signal.butter(2, 0.2, 0.0, "high"))));    //? expect: Err("pyl.signal: butter: unsupported btype `high` (use \"low\" or \"band\")")
+println(str(try(|| signal.butter(2, 0.2, 0.0, "notch"))));   //? expect: Err("pyl.signal: butter: unsupported btype `notch` (use \"low\", \"high\" or \"band\")")
 
 // ---- rand ------------------------------------------------------------------
 
