@@ -60,7 +60,15 @@ pub struct FMap {
     /// (key hash, key, value) in insertion order.
     pub entries: Vec<(u64, Value, Value)>,
     /// hash → entry indices.
-    index: std::collections::HashMap<u64, Vec<u32>>,
+    index: std::collections::HashMap<u64, Bucket>,
+}
+
+/// Entry indices sharing one key hash. True 64-bit collisions are rare, so
+/// the single-index case is stored inline (no per-key heap allocation).
+#[derive(Debug, Clone)]
+enum Bucket {
+    One(u32),
+    Many(Vec<u32>),
 }
 
 impl FMap {
@@ -78,13 +86,28 @@ impl FMap {
 
     /// Candidate entry indices for a key hash.
     pub fn candidates(&self, hash: u64) -> &[u32] {
-        self.index.get(&hash).map(|v| v.as_slice()).unwrap_or(&[])
+        match self.index.get(&hash) {
+            None => &[],
+            Some(Bucket::One(i)) => std::slice::from_ref(i),
+            Some(Bucket::Many(v)) => v,
+        }
     }
 
     pub fn push(&mut self, hash: u64, key: Value, value: Value) {
         let idx = self.entries.len() as u32;
         self.entries.push((hash, key, value));
-        self.index.entry(hash).or_default().push(idx);
+        match self.index.entry(hash) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(Bucket::One(idx));
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => match e.get_mut() {
+                Bucket::One(first) => {
+                    let first = *first;
+                    e.insert(Bucket::Many(vec![first, idx]));
+                }
+                Bucket::Many(v) => v.push(idx),
+            },
+        }
     }
 
     pub fn set_at(&mut self, idx: u32, value: Value) -> Value {
@@ -93,10 +116,36 @@ impl FMap {
 
     pub fn remove_at(&mut self, idx: u32) -> (u64, Value, Value) {
         let e = self.entries.remove(idx as usize);
-        // Indices shifted; rebuild the index (removal is the rare operation).
-        self.index.clear();
-        for (i, (h, _, _)) in self.entries.iter().enumerate() {
-            self.index.entry(*h).or_default().push(i as u32);
+        // Drop the removed entry from its bucket, then shift the indices
+        // that sat above it down by one (entries.remove shifted them).
+        match self.index.get_mut(&e.0) {
+            Some(Bucket::One(_)) => {
+                self.index.remove(&e.0);
+            }
+            Some(Bucket::Many(v)) => {
+                v.retain(|&i| i != idx);
+                if let [only] = v.as_slice() {
+                    let only = *only;
+                    self.index.insert(e.0, Bucket::One(only));
+                }
+            }
+            None => {}
+        }
+        for bucket in self.index.values_mut() {
+            match bucket {
+                Bucket::One(i) => {
+                    if *i > idx {
+                        *i -= 1;
+                    }
+                }
+                Bucket::Many(v) => {
+                    for i in v {
+                        if *i > idx {
+                            *i -= 1;
+                        }
+                    }
+                }
+            }
         }
         e
     }
@@ -264,3 +313,4 @@ impl Heap {
     }
 
 }
+
