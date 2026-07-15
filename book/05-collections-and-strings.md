@@ -1,4 +1,4 @@
-# Collections and Strings
+# Collections, Strings, and Bytes
 
 Fable ships four workhorse containers — `List[T]`, `Map[K, V]`, tuples, and
 `Range` — plus a well-stocked string toolbox. This chapter tours all of
@@ -152,10 +152,24 @@ println(names.zip([1, 2]));
 [("Gold", 1), ("Silver", 2)]
 ```
 
-To loop over those pairs, destructure in the body — `for pair in
-names.enumerate() { let (i, name) = pair; ... }` — since `for` binds a
-single name (`for (a, b) in ...` is a parse error). Finally, `flat_map`
-maps each element to a *list* and splices the results into one:
+To loop over those pairs, destructure right in the `for` head — a `for` head
+takes any irrefutable pattern (a name, `_`, or a nested tuple or struct
+pattern):
+
+```fable
+for (i, name) in ["Gold", "Silver", "Bronze"].enumerate() {
+    println("{i}: {name}");
+}
+```
+
+```text
+0: Gold
+1: Silver
+2: Bronze
+```
+
+Finally, `flat_map` maps each element to a *list* and splices the results
+into one:
 
 ```fable
 let lines = ["a,b", "c", "d,e,f"];
@@ -518,7 +532,71 @@ doubles the `join` time and roughly *quadruples* the `concat` time. For a
 handful of pieces, `+` and interpolation are fine; reach for the list when
 building strings in a loop. (`join` puts the separator only *between*
 elements: `["solo"].join(" and ")` is `"solo"`, and joining an empty list
-is `""`.)
+is `""`.) The standard library's `strings.Builder` (chapter 8) wraps this
+pattern in a tidy object when you would rather push than collect.
+
+## Bytes: raw binary buffers
+
+`String` is text — Unicode, immutable, counted by character. When you need
+*bytes* — a file format, a network frame, a checksum — reach for `Bytes`, a
+growable, mutable buffer of 8-bit values. Build one with `bytes(n)`
+(zero-filled) or `bytes_of([...])`, and grow it with `push` and the
+little-endian and big-endian multi-byte pushers, so wire formats need no
+bit-shuffling by hand:
+
+```fable
+let buf = bytes(0);
+buf.push(0x89);           // one byte
+buf.push_str("PNG");      // a string's UTF-8 bytes
+buf.push_u32be(13);       // a big-endian 32-bit field
+
+println(buf.len());
+println(buf.to_list());
+println("{buf}");
+```
+
+```text
+8
+[137, 80, 78, 71, 0, 0, 0, 13]
+<bytes 8>
+```
+
+`Bytes` displays as `<bytes N>` rather than dumping its contents. Read
+multi-byte fields back with the matching `read_*` accessors, and index
+single bytes with `get`:
+
+```fable
+let buf = bytes_of([137, 80, 78, 71, 0, 0, 0, 13]);
+println(buf.read_u32be(4));   // the length field, decoded
+println(buf.get(0));          // the signature byte
+```
+
+```text
+13
+137
+```
+
+`String` and `Bytes` bridge through UTF-8: `"hi".to_bytes()` encodes, and
+`some_bytes.utf8()` decodes into a `Result` (invalid UTF-8 is an `Err`, not
+a panic). Equality is structural — two buffers with the same bytes are
+equal regardless of how they were built — and `Bytes` can be a map key:
+
+```fable
+let hi = "hi".to_bytes();
+println(hi.to_list());                  // [104, 105]
+println(hi.utf8());                     // Ok("hi")
+println(bytes_of([104, 105]) == hi);    // structural equality
+```
+
+```text
+[104, 105]
+Ok("hi")
+true
+```
+
+`fs.read_bytes` and `fs.write_bytes` (chapter 8) move a `Bytes` to and from
+disk unchanged, which is how the `png` and `synthwave` demos write real PNG
+and WAV files from Fable.
 
 ## Putting it together
 
@@ -555,8 +633,9 @@ appeared.
 
 Lists and maps are mutable reference types — `clone` when you want a copy,
 `get` when a miss is expected, `[]` when it would be a bug. Tuples are
-immutable glue, ranges are values, and strings count characters, not
-bytes, and are built efficiently with collect-then-join. Between the
-containers and the `Option`-returning methods everywhere, most day-to-day
-Fable is a transformation pipeline ending in a pattern match. Next: under
-the hood, at the bytecode and garbage collector that make it all go.
+immutable glue, ranges are values, strings count characters and build
+efficiently with collect-then-join, and `Bytes` carries the raw binary when
+text is the wrong shape. Between the containers and the `Option`-returning
+methods everywhere, most day-to-day Fable is a transformation pipeline
+ending in a pattern match — and those `Option`s and `Result`s are the
+subject of the next chapter.

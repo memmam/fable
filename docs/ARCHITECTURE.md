@@ -339,7 +339,43 @@ pattern: one enum variant, one `sig()` scheme, one `METHOD_TABLE` row (the
 LSP completes them for free), one `natives.rs` arm. `FABLE_MAX_DEPTH` is
 read once at VM construction into a `max_frames` field.
 
-## v0.7 additions (in progress)
+## v0.7 additions
+
+**Bytes and bitwise.** `Obj::Bytes(Vec<u8>)` is a new GC leaf (no traced
+children) with a `Type::Bytes` primitive; its methods (checked accessors,
+little- and big-endian pushers/readers, bulk appends, UTF-8 bridging) follow
+the one-variant/one-`sig()`/one-`METHOD_TABLE`-row/one-`natives.rs`-arm
+pattern, and `fs.read_bytes`/`write_bytes` move it to disk. Bitwise
+operators (`& | ^ << >>`) are Int-only ops in the compiler/VM with Rust's
+relative precedence; the Int intrinsics (`count_ones`/`ushr`/`rotate_*`/
+`to_hex`, plus Bytes readers) are ordinary natives, and the demos' formerly
+hand-rolled versions are now one-line wrappers over them.
+
+**fft.rs** implements the `fft` builtin namespace — an iterative radix-2
+Cooley–Tukey transform for power-of-two lengths and Bluestein's chirp-z for
+everything else, over split-complex `List[Float]` pairs, following numpy's
+conventions. It is pure Rust with a naive-DFT oracle in its unit tests and a
+CI cross-check against numpy at 1e-9; the natives marshal the lists in and
+out with the standard rooted-allocation helpers.
+
+**worker.rs** implements worker isolates: `worker.spawn` compiles a file into
+a brand-new `Vm` (its own heap, globals, and GC) on its own OS thread, joined
+to the parent only by `String` channels (`std::sync::mpsc`). Nothing GC'd is
+shared, so no locking is needed; the parent's handle is a non-traced
+`Obj::Worker` holding the channel ends and the join handle. `spawn`
+handshakes on a compile result so errors surface synchronously, and a
+worker's panic is caught at its thread boundary and returned as an `Err` from
+`join`. Worker `println` output is routed through a shared sink so the
+golden-test harness can capture it.
+
+**The efficiency pass** rewrote the interpreter's hot paths against a
+benchmark harness (`bench/`, results in `bench/RESULTS.md`): dispatch-loop
+state hoisted into `run()` locals, write-in-place stack traffic,
+allocation-free `for` over Int ranges, an allocation-free GC mark phase,
+FMap single-entry index buckets without SipHash, borrow-based string/list
+natives, and `strings.Builder` re-backed by a `Bytes` buffer. Every change
+kept observable output byte-identical and was gated on interleaved A/B
+measurement.
 
 **gpu.rs** is the home of the `gpu` builtin namespace's implementation and
 the project's only dependency boundary: wgpu (+ pollster) sit behind the

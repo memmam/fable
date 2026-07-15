@@ -1,6 +1,6 @@
 # The Fable Language Specification
 
-**Version 0.6** — This document is the normative reference for the Fable
+**Version 0.7** — This document is the normative reference for the Fable
 programming language. Inline `(vN)` tags mark the release where a feature
 landed. The implementation (`src/`), the golden test suite (`tests/spec/`),
 and the book (`book/`) must all agree with this document.

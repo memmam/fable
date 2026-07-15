@@ -6,7 +6,7 @@ variable outlives its scope, or when the garbage collector actually runs —
 this is the tour. Everything here was produced by running the real tools.
 
 Fable compiles to bytecode and runs it on a stack-based virtual machine —
-about 13,000 lines of dependency-free Rust in `src/`. This chapter describes
+about 21,000 lines of dependency-free Rust in `src/`. This chapter describes
 it from the outside in; pointers into the source are at the end.
 
 ## The pipeline
@@ -341,7 +341,7 @@ panic: division by zero
 
 Deep recursion panics too (`panic: stack overflow`) rather than crashing;
 long traces are truncated after 64 frames. Calls in tail position reuse
-their frame (see chapter 7), so only recursion with pending work — a `+`
+their frame (see chapter 3), so only recursion with pending work — a `+`
 around the recursive call, say — spends the 4,096-frame budget; give such a
 function an accumulator, or reach for a loop.
 
@@ -396,8 +396,14 @@ read. Rough map, in pipeline order:
 | `src/bytecode.rs` | the `Op` enum — every instruction you saw in `fable dis`, documented |
 | `src/vm.rs` | the dispatch loop, call frames, upvalues, GC checkpoints, stack traces |
 | `src/value.rs` | runtime values, heap objects, and the mark-sweep collector itself |
-| `src/natives.rs` | implementations of the ~120 builtin functions and methods |
+| `src/natives.rs` | implementations of the ~150 builtin functions and methods |
 | `src/dis.rs` | the disassembler (it's 124 lines — a good first file) |
 
 `docs/ARCHITECTURE.md` covers the same ground as this chapter from a
 maintainer's perspective, with the design rationale spelled out.
+
+---
+
+Previous: [Workers, `fft`, and the GPU](09-workers.md) ·
+Next: [The Toolchain](11-toolchain.md) ·
+[Back to the index](README.md)

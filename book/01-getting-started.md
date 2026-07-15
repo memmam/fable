@@ -29,10 +29,15 @@ USAGE:
     fable run <file.fable>        compile and run
     fable check <file.fable>      type-check only
     fable dis <file.fable>        show compiled bytecode
-    fable fmt <file.fable> [-w]   format source (print, or -w to rewrite)
+    fable fmt <file.fable>... [-w] [--width N]
+                                  format each file (print, or -w to rewrite;
+                                  N: max line width, default 100)
+    fable test [paths...]         run golden tests (//? expect/error/panic
+                                  directives in .fable files; default: .)
     fable tokens <file.fable>     dump tokens (debug)
     fable ast <file.fable>        dump the AST (debug)
     fable repl                    interactive session
+    fable lsp                     language server (JSON-RPC over stdio)
 
 ENVIRONMENT:
     FABLE_GC_STRESS=1    collect garbage before every allocation
@@ -366,9 +371,8 @@ expression-bodied functions. The next chapters tour the language proper —
 values and types, control flow, pattern matching, and the collection
 library.
 
-One expectation to set now: Fable is deliberately small. v0.2 added methods
-on your own types, multi-file modules, the `?` operator, and tail-call
-optimization (chapter 7 covers all four) — but there are still no traits,
-no visibility modifiers, and no package manager. What the language does
-include, it checks thoroughly at compile time, as the diagnostics above
-suggest.
+One expectation to set now: Fable is deliberately small. It has methods on
+your own types, multi-file modules, the `?` operator, and tail-call
+optimization — the following chapters cover each — but there are still no
+traits and no package manager. What the language does include, it checks
+thoroughly at compile time, as the diagnostics above suggest.
