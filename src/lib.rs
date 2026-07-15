@@ -4,6 +4,7 @@
 //! [`compiler`] (bytecode) → [`vm`] (execution with a mark-sweep GC).
 
 pub mod ast;
+pub mod bundle;
 pub mod builtins;
 pub mod bytecode;
 pub mod check;

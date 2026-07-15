@@ -100,6 +100,12 @@ golden-tested. This image is Fable output too:
 - **A REPL** with persistent incremental compilation, working imports, and
   `:type`; plus a comment-preserving formatter (`fmt`) and a bytecode
   disassembler (`dis`).
+- **Self-contained binaries.** `fable build dir/` staples a program — its
+  modules, data files, and worker `.fable`s — onto the interpreter as an
+  appended payload, producing one executable that needs no `fable` and no
+  source tree. Cross-target by design: every release ships the whole
+  [demo zoo](demos/#the-demo-zoo--download-and-run) built for Linux,
+  Windows, and macOS.
 - **Rust-quality diagnostics** everywhere, with stable codes, multi-span
   labels, and targeted hints (write `{}` for an empty map and the error
   tells you the literal is `{:}`):
@@ -260,6 +266,7 @@ src/
   fft.rs          the native FFT kernel (radix-2 + Bluestein)
   worker.rs       OS-thread worker isolates and their channels
   gpu.rs          feature-gated GPU compute (wgpu, behind --features gpu)
+  bundle.rs       fable build: staple a program into a standalone binary
   fmt.rs          comment-preserving, width-aware formatter
   repl.rs         incremental REPL with rollback
   modules.rs      the import loader (dedup, cycles, FABLE_PATH, std)

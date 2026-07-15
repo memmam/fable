@@ -6,6 +6,17 @@ every feature listed here.
 
 ## Unreleased (v0.7 — the infrastructure release, in progress)
 
+- `fable build <dir|file>` — pack a program into one self-contained
+  executable. Every file the program touches (modules, data files, the
+  `.fable` files it hands `worker.spawn`) is stapled onto a copy of the
+  interpreter as a dependency-free appended payload; the binary reads its
+  own 16-byte trailer at startup, unpacks into a scratch directory, and
+  runs — so its output is byte-identical to `fable <path>` from source.
+  Stapling is target-independent (`--launcher` supplies cross-compiled
+  interpreter bytes), so one host assembles binaries for every target. The
+  release now ships the whole **demo zoo**: all seventeen demos cross-built
+  for `x86_64`/`aarch64` Linux and Windows and Apple-Silicon macOS, as
+  `fable-demozoo-<version>-<target>.tar.gz`.
 - The efficiency pass: a measured, benchmark-gated optimization sweep
   (`bench/` is the yardstick; every change was interleaved-A/B'd, and
   negative results are recorded in the audit trail). Interpreter: frame-

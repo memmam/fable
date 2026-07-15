@@ -31,6 +31,27 @@ FABLE_GC_STRESS=1 ./target/release/fable test demos
 | [`swarm/`](swarm/) | A worker-pool job scheduler: three isolates crunch Collatz and prime-count jobs from a `std.deque` queue over a `std.json` protocol — static assignment, dynamic feed-on-return balancing, and panic isolation. | A fragile worker's panic comes back as `Err` from `join` and its job JSON re-runs on a fresh isolate; the dynamic section pins only schedule-independent facts, so a smarter scheduler could drop in without re-pinning a line. |
 | [`reversi/`](reversi/) | Othello on two Int bitboards: shift-and-propagate move generation in 8 masked directions, flood-and-confirm flips, SWAR popcount, and a complete greedy self-play game pinned move for move. | Every classic bit trick had to be re-derived for signed-64-with-panicking-overflow — `bits.fable` documents each trap (`>>` is arithmetic; `x & -x` panics on bit 63). The move generator is proven by pinned perft(1..6) = 4/12/56/244/1396/8200. |
 
+## The demo zoo — download and run
+
+Every demo also ships as a **self-contained binary** in each release: no
+`fable`, no source tree, no runtime — one file you run. They are built with
+`fable build`, which staples a program (its modules, its data files, and the
+worker `.fable` files it spawns) onto a copy of the interpreter; on launch the
+binary unpacks itself into a scratch directory and runs, so its output is
+byte-for-byte what `fable demos/<name>/main.fable` prints.
+
+```sh
+fable build demos/lisp -o lisp     # build one yourself
+./lisp                             # run it anywhere
+```
+
+The release carries the whole zoo cross-compiled for five desktop targets —
+`x86_64` and `aarch64` Linux, `x86_64` and `aarch64` Windows, and Apple
+Silicon macOS — as `fable-demozoo-<version>-<target>.tar.gz`. The macOS
+binaries are ad-hoc signed; the Windows and Linux binaries are unsigned.
+Extract with `tar -xf` (built in on Windows 10+ as well) and run any animal in
+the zoo.
+
 ## Where they came from
 
 The first ten demos were written against **v0.5** by ten independent

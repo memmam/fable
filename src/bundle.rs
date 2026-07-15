@@ -1,0 +1,214 @@
+//! Self-contained program bundles (v0.7): stapling a program's assets onto
+//! the interpreter to make one fixed, runnable binary.
+//!
+//! `fable build DIR` walks a program's directory, packs every file into a
+//! payload, and appends `payload || u64(len) || MAGIC` to a copy of the
+//! `fable` executable. When that stapled binary starts, [`read_self`] finds
+//! the trailer, [`Bundle::extract_to`] unpacks the files into a scratch
+//! directory, and the normal runner takes over from there — so imports,
+//! `fs.*`, and `worker.spawn` all resolve against real files with no
+//! special-casing anywhere in the loader or the VM.
+//!
+//! The format is deliberately dumb and dependency-free: little-endian
+//! length-prefixed records. Reading its own tail costs one 16-byte read for
+//! an ordinary (un-stapled) `fable`, so the launcher path is free until a
+//! bundle is actually present.
+
+use std::io::{self, Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+
+/// Trailer sentinel; also the format version (bump the trailing digit on an
+/// incompatible layout change). Chosen to be unlikely in a binary's tail.
+const MAGIC: &[u8; 8] = b"FABLZOO1";
+
+/// An unpacked program: the entry file's bundle-relative path plus every
+/// file's bundle-relative path and contents.
+pub struct Bundle {
+    pub entry: String,
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
+/// Serialize a payload from an entry path and a set of `(relpath, bytes)`.
+/// Paths are stored with `/` separators regardless of host.
+pub fn payload(entry: &str, files: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_str(&mut out, entry);
+    out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    for (path, data) in files {
+        put_str(&mut out, path);
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(data);
+    }
+    out
+}
+
+/// Staple a payload onto launcher bytes, producing a runnable binary image.
+pub fn staple(launcher: &[u8], payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(launcher.len() + payload.len() + 16);
+    out.extend_from_slice(launcher);
+    out.extend_from_slice(payload);
+    out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    out.extend_from_slice(MAGIC);
+    out
+}
+
+/// Read the bundle stapled onto the currently running executable, if any.
+/// Returns `None` for an ordinary `fable` (no trailer) and on any read or
+/// parse trouble — a malformed tail must never keep the plain CLI from
+/// running.
+pub fn read_self() -> Option<Bundle> {
+    let exe = std::env::current_exe().ok()?;
+    read_from(&exe).ok().flatten()
+}
+
+fn read_from(path: &Path) -> io::Result<Option<Bundle>> {
+    let mut f = std::fs::File::open(path)?;
+    let total = f.seek(SeekFrom::End(0))?;
+    if total < 16 {
+        return Ok(None);
+    }
+    // The last 16 bytes are `[u64 payload_len][MAGIC]`.
+    f.seek(SeekFrom::End(-16))?;
+    let mut trailer = [0u8; 16];
+    f.read_exact(&mut trailer)?;
+    if &trailer[8..16] != MAGIC {
+        return Ok(None);
+    }
+    let len = u64::from_le_bytes(trailer[0..8].try_into().unwrap());
+    // A plausible payload sits entirely within the file, before the trailer.
+    if len == 0 || len + 16 > total {
+        return Ok(None);
+    }
+    f.seek(SeekFrom::Start(total - 16 - len))?;
+    let mut buf = vec![0u8; len as usize];
+    f.read_exact(&mut buf)?;
+    Ok(parse(&buf))
+}
+
+/// Parse a payload blob into a [`Bundle`]. Returns `None` on any truncation
+/// or length that runs past the buffer.
+pub fn parse(buf: &[u8]) -> Option<Bundle> {
+    let mut c = Cursor { buf, pos: 0 };
+    let entry = c.take_str()?;
+    let count = c.take_u32()? as usize;
+    let mut files = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        let path = c.take_str()?;
+        let len = c.take_u64()? as usize;
+        let data = c.take(len)?.to_vec();
+        files.push((path, data));
+    }
+    Some(Bundle { entry, files })
+}
+
+impl Bundle {
+    /// Write every bundled file under `dir`, creating parent directories as
+    /// needed, and return the absolute path of the extracted entry file.
+    /// Rejects paths that would escape `dir` (absolute or `..`).
+    pub fn extract_to(&self, dir: &Path) -> io::Result<PathBuf> {
+        for (rel, data) in &self.files {
+            let target = safe_join(dir, rel).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("unsafe bundle path `{rel}`"))
+            })?;
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, data)?;
+        }
+        safe_join(dir, &self.entry)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unsafe bundle entry path"))
+    }
+}
+
+/// Join a `/`-separated bundle-relative path onto `base`, refusing anything
+/// that is absolute or climbs out with `..`.
+fn safe_join(base: &Path, rel: &str) -> Option<PathBuf> {
+    let mut out = base.to_path_buf();
+    for seg in rel.split('/') {
+        match seg {
+            "" | "." => continue,
+            ".." => return None,
+            s => {
+                if s.contains('\\') || Path::new(s).is_absolute() {
+                    return None;
+                }
+                out.push(s);
+            }
+        }
+    }
+    Some(out)
+}
+
+fn put_str(out: &mut Vec<u8>, s: &str) {
+    out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+
+struct Cursor<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let end = self.pos.checked_add(n)?;
+        let slice = self.buf.get(self.pos..end)?;
+        self.pos = end;
+        Some(slice)
+    }
+    fn take_u32(&mut self) -> Option<u32> {
+        Some(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn take_u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    fn take_str(&mut self) -> Option<String> {
+        let n = self.take_u32()? as usize;
+        String::from_utf8(self.take(n)?.to_vec()).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip() {
+        let files = vec![
+            ("main.fable".to_string(), b"println(\"hi\");".to_vec()),
+            ("lib/util.fable".to_string(), b"pub fn f() -> Int { 1 }".to_vec()),
+            ("data.bin".to_string(), vec![0u8, 1, 2, 255, 254]),
+        ];
+        let blob = payload("main.fable", &files);
+        let b = parse(&blob).expect("parses");
+        assert_eq!(b.entry, "main.fable");
+        assert_eq!(b.files, files);
+    }
+
+    #[test]
+    fn staple_then_read_tail() {
+        let launcher = b"pretend-this-is-an-executable-image".to_vec();
+        let files = vec![("main.fable".to_string(), b"1".to_vec())];
+        let img = staple(&launcher, &payload("main.fable", &files));
+        // The trailer must be exactly the last 16 bytes.
+        assert_eq!(&img[img.len() - 8..], MAGIC);
+        // And the payload parses back out of the middle.
+        let plen = u64::from_le_bytes(img[img.len() - 16..img.len() - 8].try_into().unwrap());
+        let start = img.len() - 16 - plen as usize;
+        let b = parse(&img[start..img.len() - 16]).expect("parses");
+        assert_eq!(b.files, files);
+    }
+
+    #[test]
+    fn plain_binary_has_no_bundle() {
+        assert!(parse(b"not a payload at all").is_none());
+    }
+
+    #[test]
+    fn rejects_escaping_paths() {
+        let dir = std::env::temp_dir();
+        assert!(safe_join(&dir, "../evil").is_none());
+        assert!(safe_join(&dir, "a/../../evil").is_none());
+        assert!(safe_join(&dir, "ok/nested/file.txt").is_some());
+    }
+}

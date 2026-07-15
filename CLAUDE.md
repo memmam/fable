@@ -80,6 +80,7 @@ cargo build --release
 ./target/release/fable test tests/spec        # 294
 ./target/release/fable test demos             # 71, also with FABLE_GC_STRESS=1
 FABLE_PATH=ports ./target/release/fable test ports/pyl/spec.fable   # + ports/icaa/spec.fable
+./target/release/fable build demos/csvql -o /tmp/csvql && (cd /tmp && ./csvql)  # `fable build` smoke
 bench/run.sh 3                                # perf A/B vs a pre-change binary
 ```
 
@@ -137,7 +138,14 @@ and the standing numbers.
   equality (ICAA 18/18 pixel-exact; claudewave 32/32 battery, 29 bit-exact).
   Then a measured efficiency pass (see `bench/RESULTS.md`): checkers −15%,
   lisp −20%, string building −55%, map ops −37%, GC-stress suite −67% on the
-  heaviest demo — all with byte-identical golden output.
+  heaviest demo — all with byte-identical golden output. Finally, distribution:
+  `fable build` staples a program (modules, data files, worker `.fable`s) onto
+  the interpreter as an appended, dependency-free payload the binary reads from
+  its own tail at startup — a self-contained executable whose output is
+  byte-identical to the source run. Target-independent stapling (`--launcher`)
+  lets one host cross-build the whole **demo zoo**: all seventeen demos for
+  `x86_64`/`aarch64` Linux + Windows and Apple-Silicon macOS, shipped in the
+  release.
 
 ## Workflow conventions
 
