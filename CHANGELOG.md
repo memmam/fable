@@ -6,6 +6,21 @@ every feature listed here.
 
 ## Unreleased (v0.7 — the infrastructure release, in progress)
 
+- The efficiency pass: a measured, benchmark-gated optimization sweep
+  (`bench/` is the yardstick; every change was interleaved-A/B'd, and
+  negative results are recorded in the audit trail). Interpreter: frame-
+  hot state hoisted into dispatch-loop locals, write-in-place binop and
+  native-call stack traffic, allocation-free `for` over Int ranges,
+  scalar fast paths for structural hashing, interned single-char ASCII
+  strings, allocation-free GC mark phase with out-of-line mark bits,
+  FMap single-entry buckets without SipHash. Natives: borrow-based
+  string/list methods, pre-sized joins and HOF outputs. std: Builder
+  re-backed by Bytes, json over UTF-8 bytes, deque/lists/set hot paths
+  simplified. Net (interleaved vs pre-pass): checkers −15%, lisp −20%,
+  string building −55%, map ops −37%, dispatch micros −14..19%,
+  GC-stress suite time −67% on the heaviest demo. All 294 spec and 71
+  demo goldens byte-identical throughout.
+
 - Fast-idiom natives (the efficiency pass, batch 1): every bit-heavy
   demo in the v0.7 round hand-rolled the same primitives, so they are
   now intrinsics. `Int` grew `count_ones` / `leading_zeros` /
