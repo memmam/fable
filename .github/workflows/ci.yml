@@ -181,7 +181,17 @@ jobs:
       - name: Clippy (gl, deny warnings)
         run: cargo clippy --features gl --all-targets -- -D warnings
       - name: Unit + golden spec tests (gl)
-        run: cargo test --features gl
+        # --nocapture + single-threaded [debug]: bisecting a real-hardware
+        # abort (see src/window/macos.rs's debug_step markers). cargo test
+        # normally redirects stdout/stderr into an in-memory per-test buffer
+        # it only flushes when a test finishes/panics -- a SIGABRT kills the
+        # process before that flush ever runs, so plain `eprintln!` output
+        # from the crashing test is silently lost. `--nocapture` writes
+        # straight to the real fd instead; `RUST_TEST_THREADS=1` keeps the
+        # log linear (no interleaving from other tests' parallel threads).
+        # Revert to plain `cargo test --features gl` once the crash site is
+        # found and permanently fixed.
+        run: RUST_TEST_THREADS=1 cargo test --features gl -- --nocapture
 
   demo-zoo:
     # Proves the release's cross-compile + `fable build` stapling works on
