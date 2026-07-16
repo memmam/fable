@@ -173,11 +173,14 @@ jobs:
     name: window feature (Win32/WGL)
     runs-on: windows-latest
     # This job has hung indefinitely (no output, no timeout for hours) on
-    # every run since the Win32/WGL backend first merged — see win32.rs's
-    # test-module `SetErrorMode` doc comment for the leading theory (an
-    # unclickable WER crash dialog on a headless runner). This hard cap
-    # turns that into a fast, visible failure instead of a multi-hour,
-    # 2x-billed windows-latest hang.
+    # every run since the Win32/WGL backend first merged. Job-log evidence
+    # (once the 90-minute cap above let one of these actually finish)
+    # cleared window/win32.rs entirely: all 79 lib unit tests pass in
+    # 0.04s, including window::win32::tests::create_clear_swap_poll_close.
+    # The real hang is in tests/lsp_smoke.rs's diagnostics_hover_definition
+    # -- see that file's own watchdog-thread doc comment for the ongoing
+    # diagnosis. timeout-minutes turns whatever's still unresolved into a
+    # fast, visible failure instead of a multi-hour, 2x-billed hang.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -191,8 +194,11 @@ jobs:
       - name: Unit + golden spec tests (gl)
         # windows-latest is a real Windows machine (unlike the `gl` job's
         # Xvfb-under-Linux stand-in), so `win32.rs`'s smoke test creates and
-        # drives an actual window/WGL context here.
-        run: cargo test --features gl
+        # drives an actual window/WGL context here. --nocapture: needed so
+        # tests/lsp_smoke.rs's temporary watchdog-thread diagnostics (see
+        # its own doc comment) actually reach this log instead of sitting
+        # in libtest's per-test capture buffer, which a hang never flushes.
+        run: cargo test --features gl -- --nocapture
 
   gl-macos:
     # Real Apple Silicon hardware (unlike this repo's own dev/CI containers,
