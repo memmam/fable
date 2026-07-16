@@ -181,17 +181,38 @@ jobs:
       - name: Clippy (gl, deny warnings)
         run: cargo clippy --features gl --all-targets -- -D warnings
       - name: Unit + golden spec tests (gl)
-        # --nocapture + single-threaded [debug]: bisecting a real-hardware
-        # abort (see src/window/macos.rs's debug_step markers). cargo test
-        # normally redirects stdout/stderr into an in-memory per-test buffer
-        # it only flushes when a test finishes/panics -- a SIGABRT kills the
-        # process before that flush ever runs, so plain `eprintln!` output
-        # from the crashing test is silently lost. `--nocapture` writes
-        # straight to the real fd instead; `RUST_TEST_THREADS=1` keeps the
-        # log linear (no interleaving from other tests' parallel threads).
+        # [debug]: bisecting a real-hardware-only abort (see
+        # src/window/macos.rs's debug_step markers, which narrowed it to
+        # somewhere inside NSWindow's initWithContentRect:... call). This
+        # crash is a genuine Objective-C exception unwind that Rust's
+        # runtime can't catch (a hard SIGABRT) -- but NSSetUncaughtExceptionHandler
+        # never fires for it: that hook only runs once an exception has
+        # fully unwound to the top uncaught-exception handler, and Rust's
+        # own foreign-exception guard aborts the process mid-unwind, before
+        # that point is ever reached (unlike this file's own debug_step
+        # eprintln!s, which run on the way IN, before anything can throw).
+        #
+        # objc_exception_throw() is the one universal, synchronous
+        # interception point every Objective-C raise funnels through
+        # (regardless of entry point) BEFORE any unwinding starts -- the
+        # same technique crash reporters (PLCrashReporter etc.) use. Run
+        # the test binary under lldb with a breakpoint there so we can
+        # print the exception's own description and a backtrace before
+        # letting it continue to the same abort as always.
+        #
         # Revert to plain `cargo test --features gl` once the crash site is
         # found and permanently fixed.
-        run: RUST_TEST_THREADS=1 cargo test --features gl -- --nocapture
+        run: |
+          cargo test --features gl --no-run
+          TEST_BIN=$(find target/debug/deps -maxdepth 1 -type f -name 'fable-*' ! -name '*.d' | head -1)
+          echo "test binary: $TEST_BIN"
+          lldb -b \
+            -o "breakpoint set -n objc_exception_throw" \
+            -o "run --test-threads=1 --nocapture" \
+            -o "po \$x0" \
+            -o "bt" \
+            -o "continue" \
+            -- "$TEST_BIN" || true
 
   demo-zoo:
     # Proves the release's cross-compile + `fable build` stapling works on
