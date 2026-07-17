@@ -953,7 +953,10 @@ pump, written once in `x11/shared.rs`).
 X window, with all rendering landing in an app-owned offscreen image that
 `swap_buffers` copies into the frame's acquired swapchain image and
 presents (the same stable-back-buffer indirection as the Metal backend,
-for the same reasons — see `x11/vulkan.rs`'s module docs). The backend
+for the same reasons — see `window/vulkan.rs`'s module docs; that file
+is the platform-neutral core shared by the Linux and Windows Vulkan
+backends, with `x11/vulkan.rs` and `win32/vulkan.rs` as thin
+surface-creation shims over it). The backend
 prefers a UNORM surface format explicitly (`B8G8R8A8_UNORM`, then
 `R8G8B8A8_UNORM`) so clear values stay linear — lavapipe offers an sRGB
 format first, which would silently re-encode every color. Presentation is

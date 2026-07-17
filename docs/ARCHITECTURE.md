@@ -713,15 +713,15 @@ Vulkan surface's scaffolding landed: `win32.rs` split into
 (class registration, `CreateWindowExW`, the message pump, the
 `GWLP_USERDATA` boxed-state pattern, key mapping) in `shared.rs`'s
 `Win32WindowState`, composed by `gl.rs`'s WGL half; `vulkan.rs` is the
-`VK_KHR_win32_surface` WSI backend, ported from `x11/vulkan.rs`'s
-proven Phase-1 machinery with exactly one platform substitution
-(`vkCreateWin32SurfaceKHR` over hinstance+hwnd instead of
-`vkCreateXlibSurfaceKHR` over display+window) — window lifecycle,
-UNORM-preferred swapchain, offscreen back buffer, clear and present all
-work end to end; the `gfx.*` dispatch arms panic via `vulkan_gfx_todo`
-until draw-call parity lands, the x11 backend's own intermediate
-shape. All three platform
-backends are now the same two-variant enum shape.) Every
+`VK_KHR_win32_surface` shim over the shared Vulkan windowing core
+(`window/vulkan.rs` — see that section below), holding exactly one
+platform substitution (`vkCreateWin32SurfaceKHR` over hinstance+hwnd
+instead of `vkCreateXlibSurfaceKHR` over display+window) next to the
+composed window state — window lifecycle, UNORM-preferred swapchain,
+offscreen back buffer, clear and present all work end to end; the
+`gfx.*` dispatch arms panic via `vulkan_gfx_todo` until draw-call
+parity lands, the x11 backend's own intermediate shape. All three
+platform backends are now the same two-variant enum shape.) Every
 `Inner` method becomes a two-armed `match` forwarding to whichever variant
 is live; `#[allow(clippy::large_enum_variant)]` on the enum itself
 (`gl::Inner` carries the ~45-function-pointer `GlFns` table, ~456 bytes,
@@ -857,11 +857,13 @@ pure-refactor change shaped by two real in-tree consumers: the loader
 (`loader_gipa`, now one `dlopen` per process), handle/scalar typedefs,
 the common constants/structure-types, fifteen shared `#[repr(C)]`
 structs, and the shared function-pointer types are `pub(crate)` there;
-WSI/swapchain/image machinery stays in `x11/vulkan.rs` and
-descriptor/pipeline machinery in `vk.rs`'s compute path, each with its
-sole consumer. (The descriptor/buffer/shader-module machinery later
-became shared too, when the Vulkan `gfx` surface made the window
-backend its second consumer.)
+WSI/swapchain/image machinery stayed in `x11/vulkan.rs` and
+descriptor/pipeline machinery in `vk.rs`'s compute path, each — at that
+point — with its sole consumer. (The descriptor/buffer/shader-module
+machinery later became shared too, when the Vulkan `gfx` surface made
+the window backend its second consumer; and the WSI/gfx machinery
+itself graduated when the Win32 backend became *its* second consumer —
+the `window/vulkan.rs` section below.)
 
 **The Vulkan gfx surface (`x11/vulkan.rs`, the arc's Phase 2)** maps the
 draw-call namespace onto Vulkan the way the Metal backend mapped it onto
@@ -897,6 +899,31 @@ linear/clamp-to-edge sampler at set 0 binding `2 + unit`. Verified by
 (generator script in the commit's test plan) drawn and read back to an
 exact hard-asserted center pixel under Xvfb + lavapipe, locally and in
 CI.
+
+**The shared Vulkan windowing core (`window/vulkan.rs`).** When the
+Win32 Vulkan surface made the window path itself two-consumer (its WSI
+half began as a port of the X11 backend's, one platform substitution
+apart), the whole platform-neutral machinery graduated out of
+`x11/vulkan.rs` into `window::vulkan::Chain` — the `crate::objc` /
+`crate::vk` extraction rule applied one level up. `Chain` owns
+everything downstream of the surface: the resolved function table,
+device pick (graphics queue + surface support + `VK_KHR_swapchain` +
+`VK_KHR_maintenance1`), the UNORM-preferred format choice, swapchain +
+offscreen + depth rebuild, clear/present, and the entire `gfx.*`
+draw-call surface described above. A platform shim (`x11/vulkan.rs`,
+`win32/vulkan.rs`) is now just its native window state, its WSI
+instance-extension name, and a surface-create closure handed to
+`Chain::create` — so the lavapipe pixel asserts in CI prove the exact
+code Windows runs, byte for byte. (Two deliberate Windows-visible
+consequences of unifying on the X11 superset: the device pick now also
+requires `VK_KHR_maintenance1` — which the gfx surface needs anyway,
+and which is universal wherever swapchains exist (core in 1.1) — and
+the full function table resolves at create. Neither changes any
+observable CI behavior: windows-latest ships no ICD, so creation fails
+at `vkCreateInstance` before either matters. The win32 shim still
+forwards only the window half; its `gfx.*` dispatch arms stay
+`vulkan_gfx_todo` until the draw-call-parity phase flips them to
+forwards.)
 
 ## Testing strategy
 

@@ -55,6 +55,13 @@
 //! second teardown is a no-op (the same shape as `WorkerHandle::join`'s
 //! cached-result idempotency).
 
+/// The platform-neutral Vulkan windowing core (device pick, swapchain,
+/// offscreen back buffer, clear/present, the `gfx.*` draw-call machinery)
+/// — `x11/vulkan.rs` and `win32/vulkan.rs` are thin surface-creation shims
+/// over it. Private: only the platform shims name it.
+#[cfg(all(feature = "vulkan", any(target_os = "linux", target_os = "windows")))]
+mod vulkan;
+
 #[cfg(all(any(feature = "gl", feature = "vulkan"), target_os = "linux"))]
 pub mod x11;
 #[cfg(all(any(feature = "gl", feature = "vulkan"), target_os = "linux"))]
