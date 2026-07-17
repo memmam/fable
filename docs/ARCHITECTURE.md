@@ -596,14 +596,28 @@ report every `gfx.*` call as "not compiled in" even with a live Metal
 window current, since the check fired before ever looking at
 `vm.gfx_current_window`.
 
-**Current status is scaffolding only**: `metal::Inner` is a stub whose
-`create` always returns `Err` ("not yet implemented"), so `Inner::Metal(_)`
-is never actually constructed yet — every `gfx.*`-forwarding match arm for
-that variant is `unreachable!()` rather than a real call. The device/
-queue/pipeline plumbing, MSL `compile_program`, the buffer/VAO/texture
-handle tables Metal needs (its objects are pointers, not driver-issued
-integers, unlike GL), and pipeline-reflection-based uniform upload land in
-follow-up work.
+**Current status: window lifecycle real, draw calls pending.** Phase 1
+landed the device/queue/`CAMetalLayer` plumbing: `metal::Inner` holds a
+`CocoaWindowState` (composition, like `gl::Inner`) plus a retained
+`MTLDevice`/`MTLCommandQueue`/`CAMetalLayer` and an app-owned offscreen
+render target. `clear` encodes a loadAction=Clear render pass into that
+offscreen texture; `swap_buffers` acquires the frame's drawable,
+whole-texture-blits the offscreen target into it, presents, commits, and
+waits (synchronous like a GL swap). The offscreen indirection is
+load-bearing, not overhead: drawable textures are transient (no stable
+"back buffer" identity across `nextDrawable` calls) and not reliably
+CPU-readable, while the offscreen target uses `MTLStorageModeShared`
+(Apple-Silicon uniform memory) so the future `read_pixels` maps it
+directly. One deliberate deviation from `shared.rs`'s process-lifetime
+autorelease pool: the frame path pushes/pops a pool per call, because
+`nextDrawable` hands back one of a small fixed pool (~3) of drawables the
+layer only reclaims on actual release — without a per-frame drain, the
+third `swap_buffers` would block forever. Still pending (Phase 2): MSL
+`compile_program`, the buffer/VAO/texture handle tables Metal needs (its
+objects are pointers, not driver-issued integers, unlike GL),
+pipeline-reflection-based uniform upload, draws, and `read_pixels` — until
+then `gfx.compile_program` on a Metal-current window returns a clean `Err`
+and every other `gfx.*` member panics (catchably) with the same message.
 
 ## Testing strategy
 

@@ -771,11 +771,22 @@ Internally, `src/window/macos/mod.rs`'s `Inner` is a small enum
 (`Gl(gl::Inner)` / `Metal(metal::Inner)`, each gated on its own cargo
 feature) rather than the plain single-backend struct `x11`/`win32` each
 use — the only way one compiled binary can transparently hold either kind
-of live window. **Current status: scaffolding only** — `create_metal`
-always returns `Err("window.create_metal: Metal backend not yet
-implemented ...")` until the device/queue/pipeline plumbing lands in a
-follow-up; this section will gain real draw-call parity notes once `gfx.*`
-dispatch against a Metal-current window is implemented.
+of live window.
+
+**Current status: window lifecycle works; draw calls are pending.**
+`create_metal` opens a real window (`MTLDevice` + command queue +
+`CAMetalLayer` hosted by the content view), and `poll`/`key_down`/
+`mouse_pos`/`width`/`height`/`should_close`/`clear`/`swap_buffers`/
+`close` behave identically to the OpenGL backend — `clear` renders into an
+app-owned offscreen texture and `swap_buffers` blits it into the frame's
+drawable and presents (see `metal.rs`'s module docs for why the offscreen
+indirection is load-bearing). The `gfx.*` draw-call surface is not yet
+implemented against a Metal-current window: `gfx.compile_program` returns
+a clean `Err` saying so, and every other `gfx.*` member panics (catchable
+via `try`) with the same message rather than silently rendering nothing.
+Environments with no Metal-capable GPU degrade gracefully:
+`Err("window.create_metal: MTLCreateSystemDefaultDevice returned nil
+...")`.
 
 ### 7.4 The gfx namespace (v0.8, feature-gated)
 

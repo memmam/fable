@@ -55,15 +55,6 @@
 //!   (an `NSOpenGLContext`, or Metal's device/queue/layer) follow the same
 //!   discipline within their own module.
 
-// Temporary: `metal.rs`'s Phase-0 stub doesn't consume any of this yet (its
-// real device/queue/`CocoaWindowState`-composition setup is a follow-up
-// commit — see its own module doc comment), so a `--features metal`-only
-// build has no caller for anything here at all, which `-D warnings` would
-// otherwise flag wholesale. `gl.rs` already uses every item in this file, so
-// scoping the allowance to "only when `gl` is off" keeps real dead-code
-// detection active for every build that actually exercises this module.
-#![cfg_attr(not(feature = "gl"), allow(dead_code))]
-
 use std::ffi::{c_char, c_void, CString};
 use std::sync::OnceLock;
 

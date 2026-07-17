@@ -28,13 +28,14 @@
 //! both backends need are factored into [`shared`], composed by each
 //! backend rather than duplicated.
 
-// Temporary: with `gl` off, every `gfx.*`-forwarding method's `Gl` match arm
-// (its only real, parameter-using arm in this Phase-0 stub — the `Metal` arm
-// is `unreachable!()`) doesn't exist, so a `--features metal`-only build
-// sees every one of those parameters as unused. `gl.rs`'s callers already
-// exercise all of them whenever `gl` is on, so scoping the allowance to
-// "only when `gl` is off" keeps real unused-variable detection active for
-// every build that actually exercises these methods.
+// Temporary until Phase 2: with `gl` off, every `gfx.*`-forwarding method's
+// `Gl` match arm (its only real, parameter-using arm — the `Metal` arm
+// panics via `metal_gfx_todo` until the Metal draw-call surface lands)
+// doesn't exist, so a `--features metal`-only build sees every one of those
+// parameters as unused. `gl.rs`'s callers already exercise all of them
+// whenever `gl` is on, so scoping the allowance to "only when `gl` is off"
+// keeps real unused-variable detection active for every build that actually
+// exercises these methods.
 #![cfg_attr(not(feature = "gl"), allow(unused_variables))]
 
 #[cfg(feature = "gl")]
@@ -91,19 +92,12 @@ impl Inner {
         )
     }
 
-    // Every `Inner::Metal(_) => unreachable!(...)` arm below (this method
-    // through `teardown` at the end of this impl) is safe for the same
-    // reason: `create_metal` always returns `Err` in this Phase-0 stub (see
-    // `metal.rs`'s module doc comment), so `Inner::Metal(_)` is never
-    // actually constructed yet — these arms exist only so each match stays
-    // exhaustive once real Metal FFI lands and they become real forwards.
-
     pub fn poll(&mut self) {
         match self {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.poll(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.poll(),
         }
     }
 
@@ -112,7 +106,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.key_down(name),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.key_down(name),
         }
     }
 
@@ -121,7 +115,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.mouse(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.mouse(),
         }
     }
 
@@ -130,7 +124,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.width(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.width(),
         }
     }
 
@@ -139,7 +133,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.height(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.height(),
         }
     }
 
@@ -148,16 +142,12 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.should_close(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.should_close(),
         }
     }
 
     /// `"opengl"` or `"metal"` — see `WindowHandle::backend_name`'s doc
-    /// comment (`src/window/mod.rs`) for why this exists. Unlike every other
-    /// method here, this one's `Metal` arm is real, not `unreachable!()`:
-    /// it doesn't touch the (nonexistent, in Phase 0) inner Metal state at
-    /// all, so it's harmless to answer correctly even before a real Metal
-    /// window can ever be constructed.
+    /// comment (`src/window/mod.rs`) for why this exists.
     pub fn backend_name(&self) -> &'static str {
         match self {
             #[cfg(feature = "gl")]
@@ -172,7 +162,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.clear(r, g, b, a),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.clear(r, g, b, a),
         }
     }
 
@@ -181,16 +171,20 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.swap_buffers(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.swap_buffers(),
         }
     }
 
     // -----------------------------------------------------------------
     // gfx.* (v0.8) — forwarded to whichever backend is live. On the `Metal`
-    // variant these are Phase-0 `unreachable!()`s: `create_metal` always
-    // errs until the real Metal FFI lands (see `metal.rs`'s module doc
-    // comment), so `Inner::Metal(_)` is never actually constructed yet —
-    // these arms exist only so the match stays exhaustive once it is.
+    // variant, everything below `make_current` panics via `metal_gfx_todo`
+    // until Phase 2 lands the Metal draw-call surface (MSL compilation,
+    // buffer/texture handle tables, the VAO shim, reflection-based
+    // uniforms) — a live Metal window CAN be made current as of Phase 1,
+    // so unlike Phase 0 these arms are genuinely reachable and must say
+    // clearly what's missing instead of claiming unreachability. The one
+    // exception is `compile_program`, whose `Result` return lets it report
+    // the same thing as a clean, catchable `Err`.
     // -----------------------------------------------------------------
 
     pub fn make_current(&mut self) {
@@ -198,7 +192,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.make_current(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.make_current(),
         }
     }
 
@@ -207,7 +201,11 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.compile_program(vertex_src, fragment_src),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => Err(
+                "gfx.compile_program: not yet implemented on the Metal backend (draw-call \
+                 parity lands in Phase 2; use window.create() / OpenGL for gfx.* today)"
+                    .to_string(),
+            ),
         }
     }
 
@@ -216,7 +214,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.use_program(program),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -225,7 +223,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.delete_program(program),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -234,7 +232,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.create_buffer(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -243,7 +241,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.delete_buffer(buffer),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -252,7 +250,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.bind_buffer(kind, buffer),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -261,7 +259,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.upload_buffer(kind, data, dynamic),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -270,7 +268,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.create_vertex_array(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -279,7 +277,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.bind_vertex_array(vao),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -288,7 +286,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.delete_vertex_array(vao),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -297,7 +295,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_vertex_attrib(index, size, stride, offset),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -306,7 +304,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.disable_vertex_attrib(index),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -315,7 +313,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.create_texture(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -324,7 +322,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.delete_texture(tex),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -333,7 +331,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.bind_texture(tex),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -342,7 +340,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.active_texture_unit(unit),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -351,7 +349,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.upload_texture(data, width, height, has_alpha),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -360,7 +358,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_uniform_int(program, name, v),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -369,7 +367,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_uniform_float(program, name, v),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -378,7 +376,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_uniform_vec2(program, name, x, y),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -387,7 +385,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_uniform_vec3(program, name, x, y, z),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -396,7 +394,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_uniform_vec4(program, name, x, y, z, w),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -405,7 +403,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_uniform_mat4(program, name, values),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -414,7 +412,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.draw_arrays(first, count),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -423,7 +421,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.draw_elements(count, byte_offset),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -432,7 +430,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.gfx_clear(r, g, b, a),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -441,7 +439,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.set_depth_test(enabled),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -450,7 +448,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.viewport(x, y, w, h),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -459,7 +457,7 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.read_pixels(x, y, w, h),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(_i) => metal_gfx_todo(),
         }
     }
 
@@ -468,7 +466,20 @@ impl Inner {
             #[cfg(feature = "gl")]
             Inner::Gl(i) => i.teardown(),
             #[cfg(feature = "metal")]
-            Inner::Metal(_i) => unreachable!("Metal backend not yet implemented (Phase 0 stub)"),
+            Inner::Metal(i) => i.teardown(),
         }
     }
+}
+
+/// The Phase-2 boundary for `gfx.*` on a live Metal window — a deliberate,
+/// loud panic (catchable via Fable's `try`, like every native panic) rather
+/// than a silent no-op that would render nothing and corrupt golden output
+/// invisibly. `compile_program` reports the same thing as an `Err` instead,
+/// since it's the one `Result`-returning member.
+#[cfg(feature = "metal")]
+fn metal_gfx_todo() -> ! {
+    panic!(
+        "gfx: draw calls are not yet implemented on the Metal backend (draw-call parity lands \
+         in Phase 2; use window.create() / OpenGL for gfx.* today)"
+    )
 }
