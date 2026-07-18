@@ -1,8 +1,9 @@
-// Bench: enum construction + match dispatch.
+// Bench: enum construction + match dispatch — 800k rounds, each
+// building one of four variants (two payload-carrying, two unit) and
+// consuming it in a four-arm match with payload binds.
 enum Op { Add(Int), Mul(Int), Neg, Nop }
 let mut acc = 7;
-let mut i = 0;
-while i < 800000 {
+for i in 0..800000 {
     let op = match i & 3 {
         0 -> Op.Add(i & 255),
         1 -> Op.Mul(3),
@@ -15,6 +16,5 @@ while i < 800000 {
         Op.Neg -> 1000003 - acc,
         Op.Nop -> acc,
     };
-    i += 1;
 }
 println(acc);

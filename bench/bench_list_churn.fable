@@ -1,23 +1,21 @@
 // Bench: short-lived small lists and structs, checkers-movegen style
-// (13.5M List allocs/game there). Exercises MakeList/heap alloc/free and
-// the GC checkpoint path; the lists die almost immediately.
+// (13.5M List allocs/game there): 300k rounds each allocating a moves
+// list, four 2-element path lists + empty caps lists + Move structs,
+// then iterating and dropping them. Exercises MakeList/heap alloc/free
+// and the GC checkpoint path; the lists die almost immediately.
 struct Move {
     path: List[Int],
     caps: List[Int],
 }
 
 let mut acc = 0;
-let mut i = 0;
-while i < 300000 {
+for i in 0..300000 {
     let moves: List[Move] = [];
-    let mut d = 0;
-    while d < 4 {
+    for d in 0..4 {
         moves.push(Move { path: [i, i + d], caps: [] });
-        d += 1;
     }
     for m in moves {
         acc = (acc + m.path[1] - m.path[0]) % 1000003;
     }
-    i += 1;
 }
 println("{acc}");

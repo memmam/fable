@@ -1,6 +1,7 @@
-// Bench: bare user-function call machinery (CallFn/Return/push_frame).
-// Isolates the dominant single cost in the checkers macro: ~67M user fn
-// calls per game (b.at / side_of / is_king style helpers), no allocation.
+// Bench: bare user-function call machinery (CallFn/Return/push_frame) —
+// 3.6M allocation-free user fn calls (1.2M rounds of two `small` + one
+// `add3`). Isolates the dominant single cost in the checkers macro:
+// ~67M user fn calls per game (b.at / side_of / is_king style helpers).
 fn small(p: Int) -> Int {
     if p > 0 {
         1
@@ -12,9 +13,7 @@ fn add3(a: Int, b: Int, c: Int) -> Int {
 }
 
 let mut acc = 0;
-let mut i = 0;
-while i < 1200000 {
+for i in 0..1200000 {
     acc = (acc + add3(small(i % 5 - 2), small(i % 3 - 1), i % 7)) % 1000003;
-    i += 1;
 }
 println("{acc}");

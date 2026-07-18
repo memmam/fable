@@ -1,9 +1,11 @@
-// Bench: float arithmetic (mandelbrot-ish inner loop).
+// Bench: Float arithmetic — a mandelbrot escape-time kernel (Float
+// mul/add/compare + Int-to-Float conversion) over a 300x300 grid, up to
+// 60 iterations per pixel. The escape loop stays a `while`: its index is
+// the payload and escapes the loop (`total += it` reads the iteration
+// count after break), which a for-binding cannot express.
 let mut total = 0;
-let mut py = 0;
-while py < 300 {
-    let mut px = 0;
-    while px < 300 {
+for py in 0..300 {
+    for px in 0..300 {
         let cx = -2.0 + 3.0 * px.to_float() / 300.0;
         let cy = -1.2 + 2.4 * py.to_float() / 300.0;
         let mut x = 0.0;
@@ -17,8 +19,6 @@ while py < 300 {
             it += 1;
         }
         total += it;
-        px += 1;
     }
-    py += 1;
 }
 println(total);
