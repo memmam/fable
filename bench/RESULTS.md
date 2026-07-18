@@ -338,9 +338,18 @@ M-series microarchitectural insight would qualify).
   allocation *count* was never the cost — and bench_display regressed
   reproducibly (+8.2%/+4.5%, container display paying the
   representation branch). Dropped per the pre-registered gate.
-  Re-attempt only if a genuinely churn-bound hot workload becomes a
-  target; the full implementation (gauntlet-green, goldens
-  byte-identical) is archived on branch `h2-small-list`.
+  **Standing watch (user-directed, 2026-07-18) — this entry is softer
+  than its neighbors: track the signal, don't just refrain.** The
+  mechanism is proven (that reproducible list_churn −7%); only the
+  workload was wrong. Whenever a new bench, demo, port, or
+  implementation type shows churn-bound list behavior — allocation
+  cost that a small-list representation would erase, the shape
+  bench_list_churn rewards — append the sighting here, dated, with
+  the row that showed it. Enough accumulated sightings across
+  *different* cases pushes H2 back over the edge for a fresh look;
+  the full implementation (gauntlet-green, goldens byte-identical)
+  is archived on branch `h2-small-list` as the starting point.
+  Sightings so far: none beyond bench_list_churn itself.
 
 ## Known headroom (identified, not yet taken)
 
