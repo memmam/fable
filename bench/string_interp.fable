@@ -1,9 +1,8 @@
-// Bench: interpolation + short-string churn.
+// Bench: string interpolation + short-string churn — 200k two-hole
+// interpolations, each result immediately measured and dropped.
 let mut n = 0;
-let mut i = 0;
-while i < 200000 {
+for i in 0..200000 {
     let s = "row {i}: value = {i * 7 % 93}";
     n += s.len();
-    i += 1;
 }
 println(n);

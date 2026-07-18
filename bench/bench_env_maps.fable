@@ -1,10 +1,9 @@
 // Bench: small Map[String, _] create/insert/get churn, lisp-interpreter
-// environment style (one fresh map per apply; string-keyed get on a
-// parent chain). Exercises FMap hashing, map_find, and Variant (Option)
-// allocation in map.get.
+// environment style (150k rounds: one fresh map, three inserts, a hit
+// get, a miss get, a contains_key + index). Exercises FMap hashing,
+// map_find, and Variant (Option) allocation in map.get.
 let mut acc = 0;
-let mut i = 0;
-while i < 150000 {
+for i in 0..150000 {
     let env: Map[String, Int] = {:};
     env["x"] = i;
     env["y"] = i + 1;
@@ -20,6 +19,5 @@ while i < 150000 {
     if env.contains_key("y") {
         acc = (acc + env["y"]) % 1000003;
     }
-    i += 1;
 }
 println("{acc}");

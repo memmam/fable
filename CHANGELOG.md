@@ -75,6 +75,25 @@ functionality, judged per-architecture. In progress:
   comparisons). 184 new cross-checks, all max_diff=0 on first run;
   the port READMEs and CONTRACT now describe exactly what CI
   enforces, with the one-time review rounds moved to history.
+- **Consistency pass — the bench harness enforces what it claims**:
+  ab.py now captures every rep's stdout and fails the run on a
+  checksum instability or (when sources are identical between trees)
+  a cross-side mismatch — the "wrong answers can't win" claim is
+  enforced, not aspirational; removed/added benches are reported
+  instead of silently unlisted; run.sh propagates failures and is
+  scoped to what it is (single-binary profiling; the A/B gate is
+  ab.py + the four-arch workflow). Every bench opens with a precise
+  measurand header; counted scaffolding loops converted to
+  `for i in 0..N` with the three deliberate `while` keeps documented
+  in place (arith_loop's loop IS its measurand; float_loop's escape
+  index; bitwise_masks' hand-rolled popcount workload);
+  bench_join_heavy finally benches joins (`push_joined` +
+  `List.join`); a new `for_range` row prices the fused range-loop
+  dispatch floor. The re-specification lands as a bridged epoch:
+  its own conversion-commit matrix run (bit-identical binaries,
+  proven by the Compare-binaries step now upstreamed into bench.yml)
+  prices exactly the workload change per row per arch, recorded in
+  `bench/RESULTS.md`.
 
 ## v0.8.0 — native graphics and compute; the demo round's feature queue
 

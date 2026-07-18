@@ -1,4 +1,9 @@
-// Bench: 9-bit mask idioms (the ISA workload shape) + SWAR popcount.
+// Bench: call-heavy bit-op workload over 9-bit ISA-shaped masks — field
+// extraction (shift/and) plus one hand-rolled one-bit-at-a-time popcount
+// call per word, 400k words. The hand-rolled popcount is deliberate:
+// benches measure the VM, and its shift/and/add loop IS the workload —
+// swapping in the Int.count_ones intrinsic would delete the thing being
+// timed.
 fn popcount(v: Int) -> Int {
     let mut x = v;
     let mut c = 0;
@@ -9,13 +14,11 @@ fn popcount(v: Int) -> Int {
     c
 }
 let mut acc = 0;
-let mut i = 0;
-while i < 400000 {
+for i in 0..400000 {
     let word = i * 2654435761 & 134217727;
     let op = word >> 18 & 511;
     let a = word >> 9 & 511;
     let b = word & 511;
     acc = (acc + popcount(op ^ a & b)) % 1000003;
-    i += 1;
 }
 println(acc);

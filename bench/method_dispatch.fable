@@ -1,4 +1,5 @@
-// Bench: user impl-method dispatch in a hot loop.
+// Bench: user impl-method dispatch — 1M bound-method lookups + calls on
+// one struct receiver, each call reading and writing a field.
 struct Counter { n: Int }
 impl Counter {
     pub fn bump(self, k: Int) -> Int {
@@ -8,9 +9,7 @@ impl Counter {
 }
 let c = Counter { n: 0 };
 let mut acc = 0;
-let mut i = 0;
-while i < 1000000 {
+for i in 0..1000000 {
     acc = (acc + c.bump(i % 13)) % 1000003;
-    i += 1;
 }
 println("{acc} {c.n}");

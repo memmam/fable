@@ -91,6 +91,14 @@ jobs:
         run: |
           cargo build --release --manifest-path base/Cargo.toml
           cargo build --release --manifest-path head/Cargo.toml
+      - name: Compare binaries
+        shell: bash
+        run: |
+          b=base/target/release/fable; h=head/target/release/fable
+          [ -f "$b" ] || { b=$b.exe; h=$h.exe; }
+          if cmp -s "$b" "$h"; then verdict="BIT-IDENTICAL"; else verdict="DIFFER"; fi
+          echo "binaries: $verdict"
+          echo "**binaries: $verdict**" >> "$GITHUB_STEP_SUMMARY"
       - name: Interleaved A/B
         shell: bash
         run: |

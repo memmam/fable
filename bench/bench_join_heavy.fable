@@ -1,14 +1,34 @@
+// Bench: separator-joined row assembly — the two join idioms:
+// strings.Builder.push_joined (separator-before-each-piece accumulation,
+// 30k 16-cell rows) and List[String].join (one-shot join of a 16-cell
+// row list, 30k rows). Cell strings are pre-built so join machinery,
+// not interpolation, dominates.
 import std.strings;
-let b = strings.builder();
-let mut i = 0;
-while i < 1000000 {
-    b.push_char(97 + (i & 15));
-    i += 1;
+
+let mut cells: List[String] = [];
+for c in 0..64 {
+    cells.push("cell{c}");
 }
+
 let mut total = 0;
-let mut k = 0;
-while k < 20 {
-    total += b.build().byte_len();
-    k += 1;
+
+// Idiom 1: Builder.push_joined — assemble each row piece by piece.
+let b = strings.builder();
+for r in 0..30000 {
+    b.clear();
+    for k in 0..16 {
+        b.push_joined(",", cells[(r + k * 7) & 63]);
+    }
+    total = (total + b.build().len()) % 1000003;
+}
+
+// Idiom 2: List.join — join a 16-cell row list in one call.
+let mut row: List[String] = [];
+for k in 0..16 {
+    row.push(cells[k & 63]);
+}
+for r in 0..30000 {
+    row[r & 15] = cells[r & 63];
+    total = (total + row.join(",").len()) % 1000003;
 }
 println(total);
