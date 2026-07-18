@@ -155,11 +155,15 @@ actually enforces — and, landing with them, the rename:
   and remaps every offset (a new pinned spec test exercises jumps
   landing exactly mid-pair, bringing the suite to 313). The
   measured-rejected compare-and-branch fusion stays excluded: no fused
-  op contains control flow — the branch is always its own op. Local
-  two-sample verdict: float_loop −8.8/−5.4%, enum_match −4.2/−5.5%,
-  method_dispatch −6.0/−6.7%, nothing reproducibly worse (the
-  four-arch matrix is the gate). The book's disassembly listings were
-  regenerated to show the fused ops.
+  op contains control flow — the branch is always its own op.
+  Four-arch verdict: broad sweeps on every architecture (aarch64-linux,
+  under its `monolithic_dispatch` binding, the broadest: arith −9.1%,
+  bitwise −10.2%; Windows float_loop −10.9/−11.8%; macOS enum_match
+  −7.9/−10.2%), with one honest residual — aarch64-macos for_range
+  ~+4%, reproduced 3×, where probing showed the per-target remedy
+  doesn't exist: the implicated fusion is load-bearing for four other
+  macOS rows (`bench/RESULTS.md` has the full receipt). The book's
+  disassembly listings were regenerated to show the fused ops.
 - **Renamed — the language formerly called Fable is now Socrates**
   (binary and Cargo package `socrates`, source extension `.soc`, env vars
   `SOCRATES_*`, Mach-O payload section `__DATA,__socrateszoo`). Why:
