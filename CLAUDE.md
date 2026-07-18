@@ -144,7 +144,18 @@ their place fastest.
   decisions with their *scope* — what exactly was approved, no wider:
   an overbroad memory of a narrow decision is how conventions drift
   (the footer incident began as "trailers accepted in commits"
-  remembered as "footers accepted"). Standing instances:
+  remembered as "footers accepted"). And codification itself is a
+  four-step act, not a sentence: a rule that gets codified (i) lands
+  in the repo file where it operationally binds, (ii) lands here with
+  its scope and first instance, (iii) is copied into the session's
+  working memory, and (iv) triggers an immediate consistency audit of
+  the existing tree and policies *against the new rule* — retroactive
+  application is part of codifying, because a forward-only rule leaves
+  its whole class dirty behind it. The footer rule's 90-PR sweep is
+  the model; the standing-watch class, codified without step iv, left
+  the other negative-results entries unexamined — step iv, run late,
+  found two whose stated premise (the dispatch codegen lottery) H1 had
+  since killed. Standing instances:
   the bench files' `// Bench:` measurand headers and `bench/RESULTS.md`'s
   epoch bridge; the demos' deliberate-divergence comments; the ports'
   READMEs describing exactly what CI enforces; and RESULTS.md's
