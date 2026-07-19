@@ -115,8 +115,9 @@ is `{b0, b1, b2, a1, a2}` (a0 normalized to 1). Pinned algorithm:
    the SOS matrix of **every distinct design the ported files construct**
    (all `signal.butter` call sites across synths/drums/dsp/ambience/
    vocoder — enumerate them from the source, including the order-3
-   band-pass designs in `voice_whistle` and `render_crickets` and the
-   vocoder's per-band designs at its documented band edges) into
+   band-pass designs in `voice_whistle`, `render_crickets`, and
+   `voice_shaker`, and the vocoder's per-band designs at its documented
+   band edges) into
    `ports/claudewave/reference/sos_freeze.txt`, one line per section:
    `<design-id> b0 b1 b2 1 a1 a2` in shortest round-trip floats. The
    Socrates implementation must reproduce every frozen coefficient to
@@ -186,5 +187,6 @@ in the script's per-item expected-max residual table (item name =
 reference environment, 2× the measured residual for the rest; the
 2e-15 floor tolerates the oracle's own few-ulp drift across
 numpy/libm environments) AND within the global 1e-9 outer bound. An
-item with no table row is a comparison error. Shapes must match
-exactly.
+item with no table row is a comparison error. Shapes and sample rates
+must match exactly (a mismatch on either is a hard comparison error,
+independent of the residual check).

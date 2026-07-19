@@ -700,6 +700,14 @@ history for the full slot-by-slot record.
   both directions.
 - Boxing the FMap index loses to the extra pointer-chase on the map hot path.
 - Niche-packing `Obj` (dropping `#[repr(u8)]`) regresses match-heavy targets.
+
+  (These three entries predate this file's sampling-discipline
+  conventions — no percentage, sample count, or date was recorded for
+  any of them, unlike every entry below. Unfalsifiable as written; a
+  fresh measurement under the current ≥5-sample floor would either
+  reconfirm them with real numbers or reopen them, but none is queued
+  proactively — re-attempt only if a reason to revisit one actually
+  arises.)
 - A fused compare-and-branch peephole: sound, but the same codegen lottery
   swamps the saved dispatch. **Re-examined post-H1/H3 (2026-07-18), per
   the reflexive-codification audit that flagged this entry's premise —

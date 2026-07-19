@@ -22,6 +22,13 @@ CompiledProgram: protos, constants, runtime type info
 execution
 ```
 
+Three small foundational modules underlie every stage above and have no
+box of their own: `source.rs` (the loaded-file + line/column lookup
+every `Span` resolves through), `token.rs` (the `TokenKind` `lexer.rs`
+produces and `parser.rs` consumes), and `diag.rs` (the diagnostic
+renderer behind every error and warning, in the format SPEC.md § 10
+documents).
+
 ## Lexing (`lexer.rs`)
 
 A hand-rolled scanner. The one interesting mechanism is **string

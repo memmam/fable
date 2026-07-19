@@ -1384,12 +1384,21 @@ stmt        = let_stmt | assign_or_expr_stmt | while_stmt | for_stmt
             | return_stmt | break_stmt | continue_stmt ;
 let_stmt    = "let" [ "mut" ] let_pattern [ ":" type ] "=" expr ";" ;
 let_pattern = IDENT | tuple_pat | struct_pat ;
+tuple_pat   = "(" let_pattern "," let_pattern { "," let_pattern } ")" ;
+struct_pat  = path "{" [ field_pats ] [ ".." ] "}" ;   (* irrefutable: every
+                                                          field value is itself
+                                                          a let_pattern *)
+field_pats  = field_pat { "," field_pat } [ "," ] ;
+field_pat   = IDENT [ ":" let_pattern ] ;              (* shorthand or explicit *)
+path        = IDENT { "." IDENT } ;                    (* possibly module-qualified *)
 assign_or_expr_stmt = expr [ assign_op expr ] ";"?   (* ";" required unless final in block *)
 assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%="
             | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 while_stmt  = "while" expr block | "while" "let" pattern "=" expr block ;
 for_stmt    = "for" let_pattern "in" expr block ;
 return_stmt = "return" [ expr ] ";" ;
+break_stmt  = "break" ";" ;
+continue_stmt = "continue" ";" ;
 
 type        = "Int" | "Float" | "Bool" | "String" | "Unit"
             | IDENT [ "." IDENT ] [ "[" type { "," type } "]" ]  (* named / generic / module-qualified *)

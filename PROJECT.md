@@ -255,9 +255,12 @@ enum dispatch in shared code, as `window/macos/` does in miniature).
 Metal, Vulkan (compute + graphics), OpenCL, CUDA compute (`src/cu.rs`),
 DirectX (`src/dx.rs`), and the Win32 Vulkan window surface
 (`src/window/win32/vulkan.rs`) have all shipped; `wgpu`/`pollster` were
-deleted once that coverage landed, so every build of Socrates is
-zero-dependency (see `HISTORY.md` for how the rollout sequenced). The
-one item still to build is GL-compute, if a concrete need appears.
+deleted as soon as Metal + Vulkan + OpenCL landed (the minimum coverage
+condition, met before CUDA/DirectX/the Win32 Vulkan window shipped — see
+the "wgpu deleted only after full native coverage" bullet below for the
+exact condition and `HISTORY.md` for how the rollout sequenced), so
+every build of Socrates is zero-dependency. The one item still to build
+is GL-compute, if a concrete need appears.
 Settled decisions:
 
 - **Sequencing:** finish the Metal arc first (the Metal window/gfx
