@@ -152,9 +152,12 @@ this went unnoticed for so long — every "seventeen" count downstream
 of this sentence stayed correct even though the six/eleven breakdown
 feeding it was wrong. The original sentence above is left as shipped;
 this note is the correction, not a replacement for it — CHANGELOG.md's
-matching v0.7.0 entry and STYLE.md's opening line carry the same
-original-preserved-plus-noted-correction treatment, both pointing back
-here for the detail rather than repeating it.)
+matching v0.7.0 entry carries the same original-preserved-plus-noted-
+correction treatment, pointing back here for the detail rather than
+repeating it. STYLE.md's opening line got the opposite treatment,
+correctly: it's a living reference to current best practice ("as
+designed to now"), not a dated historical record, so its "seven new, ten
+modernized" was corrected in place rather than preserved-plus-noted.)
 
 ### Bugs — fixed in-round
 
