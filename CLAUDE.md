@@ -121,6 +121,21 @@ their place fastest.
   predate this floor live in `bench/RESULTS.md` — this is the one
   other file that states the number, per the intent-tracking
   principle's scope-recording discipline.
+  **The deterministic-instrument branch is itself a ladder, not one
+  shot:** hypothesis → a test built to confirm or refute it
+  specifically → confirmed (commit, scope the idiom set up) or refuted
+  (the next hypothesis, tested the same way) — bounded at four
+  hypothesis-tests before a fifth candidate with none confirmed is
+  itself the signal to take the other branch (escalate to the user).
+  A running scratchpad of each test's data feeds a slot-by-slot rule
+  (ground, differential, then a real reprobe-vs-switch choice each slot
+  after) for what to spend each probe or sample on — letting a
+  hypothesis be dropped *or* promoted early, on partial data — but only
+  for navigating between hypotheses faster, never for the underlying
+  KEEP/DROP verdict itself, which still needs its own full ≥5 once a
+  hypothesis is confirmed. First instance: `bench/inline-upvals-x64-probe`
+  (PR #103's x86_64-linux `for_range` residual). Full protocol, spelled
+  out slot by slot, in `bench/RESULTS.md`.
 - **This applies to whole backend implementations, not just algorithmic
   idioms** — but the trigger is the *platform* actually dropping the older
   path, not merely deprecating it. When a newer backend for the same
@@ -565,7 +580,17 @@ reworded freely on reconstruction:
   - Decision forks go to the user as plain-text lettered options, not
     interactive question UI.
   - Long CI waits are handled by scheduled self check-ins, never
-    polling loops.
+    polling loops — that's this session's own wakeup mechanism, not
+    available to a delegated subagent. A subagent briefed to push,
+    wait on a bench/CI run, and continue has no independent wakeup of
+    its own: told to just "wait," it ends its turn and stalls, needing
+    a manual resume every single time (the PR #103 x86_64-linux
+    investigation's agent did this twice in a row). The fix for that
+    case is the mirror image of this rule, not an exception to it: a
+    subagent waiting on a run polls *within its own turn*, a bounded
+    bash loop (`sleep` + a status check, capped at enough iterations to
+    cover one run), and only ends its turn once it has an actual result
+    or has exhausted the cap — never on a bare "standing by."
   - **Anything structural or behavioral about how memory itself is
     configured** — CLAUDE.md/CLAUDE.local.md conventions, what gets
     committed vs. gitignored, nested-stub patterns and their exact
