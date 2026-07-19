@@ -16,6 +16,12 @@ pub fn std_module(key: &str) -> Option<&'static str> {
         "std.lazy" => include_str!("../std/lazy.soc"),
         "std.glm" => include_str!("../std/glm.soc"),
         "std.fft" => include_str!("../std/fft.soc"),
+        "std.wav" => include_str!("../std/wav.soc"),
+        "std.svg" => include_str!("../std/svg.soc"),
+        "std.markdown" => include_str!("../std/markdown.soc"),
+        "std.crc" => include_str!("../std/crc.soc"),
+        "std.zlib" => include_str!("../std/zlib.soc"),
+        "std.png" => include_str!("../std/png.soc"),
         _ => return None,
     })
 }
@@ -23,15 +29,22 @@ pub fn std_module(key: &str) -> Option<&'static str> {
 /// Every embedded module key, for error messages and docs.
 pub fn std_module_names() -> Vec<&'static str> {
     vec![
+        "std.crc",
         "std.deque",
+        "std.fft",
         "std.flags",
         "std.glm",
         "std.iter",
         "std.json",
         "std.lazy",
         "std.lists",
+        "std.markdown",
         "std.path",
+        "std.png",
         "std.set",
         "std.strings",
+        "std.svg",
+        "std.wav",
+        "std.zlib",
     ]
 }

@@ -18,8 +18,8 @@ per-release account.
   native graphics/compute roadmap, and the invariants. Check it before an
   engineering-judgment call, before a change that might touch an
   invariant, or before touching the graphics/compute roadmap.
-- `HISTORY.md` — the incident narratives and sagas behind corrected
-  decisions behind this file and PROJECT.md. Check it when a rule
+- `HISTORY.md` — the incident narratives and sagas behind the rules and
+  corrected decisions in this file and PROJECT.md. Check it when a rule
   points here, or when auditing whether a rule still matches the
   incident that produced it.
 - `CHANGELOG.md` — the per-release account: feature lists, benchmark
@@ -91,8 +91,9 @@ cargo build --release
 # glcube's three mains need a live GL/Metal/Vulkan window (CI runs them in
 # the windowing jobs); everything else, cube.soc/spec.soc included:
 shopt -s extglob
-./target/release/socrates test demos/!(glcube)/ demos/glcube/cube.soc demos/glcube/spec.soc  # 73, also with SOCRATES_GC_STRESS=1
-SOCRATES_PATH=ports ./target/release/socrates test ports/pyl/spec.soc   # + ports/icaa/spec.soc
+./target/release/socrates test demos/!(glcube)/ demos/glcube/cube.soc demos/glcube/spec.soc  # 68, also with SOCRATES_GC_STRESS=1
+SOCRATES_PATH=ports ./target/release/socrates test ports/pyl/spec.soc
+SOCRATES_PATH=ports ./target/release/socrates test ports/icaa/spec.soc
 ./target/release/socrates build demos/csvql -o /tmp/csvql && (cd /tmp && ./csvql)  # `socrates build` smoke
 python3 bench/ab.py <base-tree> <head-tree>   # local interleaved perf A/B
 ```
@@ -131,6 +132,19 @@ numbers: `bench/RESULTS.md`.
   commits that touch no compiled source (docs, prose) ride the
   existing verdict without a re-run. Feature work happens on a
   dedicated branch off `main`.
+- **When a PR's scope expands past what its own description promised —
+  a "being worked in a follow-up" item gets folded into this PR
+  instead — post a PR comment saying so explicitly.** The description
+  is a claim, same as any other prose in the tree, and it goes stale
+  exactly the way any claim does: silently, if nothing corrects it. New
+  commits speak for what changed, never for what the description now
+  gets wrong about scope — a reader skimming the description alone
+  should not be misled about what's actually in the PR. Update the
+  description too when the stale line is a simple, one-line drift-fix
+  (e.g., "Tiers 2-4 are a follow-up" once they no longer are); the
+  comment is the part that doesn't get skipped, since it lands in the
+  PR's timeline where following eyes actually look, rather than
+  depending on someone re-reading a body that already looked settled.
 - Non-landing work is pushed for durability without a PR: a dropped
   probe or a held wave lives on its own pushed branch rather than being
   discarded or forced into a PR that was never going to merge. PRs are
@@ -140,13 +154,14 @@ numbers: `bench/RESULTS.md`.
   and end with the two attribution trailers (`Co-Authored-By` and the
   `Claude-Session` link) — the accepted channel for session
   attribution, and the *only* one.
-- The spec-suite count is stated in exactly five places — `README.md`
+- The spec-suite count is stated in exactly six places — `README.md`
   (×2), `CLAUDE.md` (×1, the gauntlet), `PROJECT.md` (×1, the
-  invariants), and `.github/RELEASE_NOTES.md` (×1) — and a count
-  change updates all five in the same PR. The same discipline covers
-  every other prose-stated count — book snippets executed/total, the
-  demo-golden count, the spelled-out demo-program count — each with its
-  own set of stating places. `tools/check_counts.sh` (run in CI's Test
+  invariants), `.github/RELEASE_NOTES.md` (×1), and
+  `book/11-toolchain.md` (×1) — and a count change updates all six in
+  the same PR. The same discipline covers every other prose-stated
+  count — book snippets executed/total, the demo-golden count, the
+  spelled-out demo-program count — each with its own set of stating
+  places. `tools/check_counts.sh` (run in CI's Test
   job) is the enforcement: it extracts every counted sentence by exact
   anchor and diffs it against a fresh run, so drift fails loudly instead
   of shipping; a sentence reworded without updating its anchor fails
@@ -241,6 +256,39 @@ numbers: `bench/RESULTS.md`.
     a partial or ambiguous description (one example generalized by
     inference, say) is where drift creeps in between sessions or across
     a model swap.
+  - **Route a session's lessons by content, not by convenience.** A
+    lesson learned mid-session defaults to whichever file is already
+    open, which is how CLAUDE.md accumulates content that was never
+    session-operating-instructions to begin with. Before writing
+    anything down, ask which of the files in "Where the project's
+    memory lives" the content is actually *about* — an engineering
+    principle or a rubric that decides close calls goes to PROJECT.md,
+    the incident/narrative behind it goes to HISTORY.md, a per-release
+    fact goes to CHANGELOG.md, a demo house rule goes to demos/STYLE.md
+    (or its ledger in demos/NOTES.md) — then apply PROJECT.md's own
+    four-step codification act to land it there, not here, unless the
+    content genuinely is about session mechanics itself (the rule
+    directly above this one). When a lesson reinforces a rule that
+    already exists elsewhere, strengthen or cross-reference that
+    existing statement instead of writing a parallel near-duplicate in
+    whichever file happens to be open.
+  - **Once a fact lives somewhere, point to it — don't re-narrate it.**
+    Routing a lesson to the right file (the rule above) is the first
+    hop, not the last: a fact that's already stated in the file it
+    actually binds to (a rule in PROJECT.md, an incident in HISTORY.md,
+    a release detail in CHANGELOG.md, a spec detail in `docs/SPEC.md`)
+    gets a fixed reference from anywhere else that needs it, not a
+    second prose copy that can silently drift out of sync with the
+    first — HISTORY.md's own "Release ledger" section (pointing at
+    CHANGELOG.md instead of restating the release-by-release account it
+    used to carry in full) is the standing model. Duplicate only when a
+    *stable, frozen* copy is the actual requirement — a golden-pinned
+    value, a benchmark's `// Bench:` epoch bridge, a contract freeze
+    file like `ports/pyl/CONTRACT.md`'s `sos_freeze.txt` — where the
+    whole point of the copy is that it must *not* track the source if
+    the source moves; state that stability requirement explicitly at
+    the copy's own site when it's the reason, so a future reader can
+    tell an intentional freeze from an accidental duplicate.
 - The spec, the book's executable snippets, and the demos' pinned output are
   the three tripwires — if a change is wrong, one of them goes red.
 - **CHANGELOG, book, README, and ARCHITECTURE updates happen in-session,

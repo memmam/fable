@@ -618,9 +618,9 @@ Two more joined in v0.7:
 | `bytes(n)` | `fn(Int) -> Bytes` | zero-filled byte buffer (§ 8.4b) |
 | `bytes_of(xs)` | `fn(List[Int]) -> Bytes` | from byte values 0..255 |
 
-### 7.1 The standard library (v0.4; expanded in v0.7-v0.8)
+### 7.1 The standard library (v0.4; expanded in v0.7-v0.9)
 
-Eleven modules written in Socrates ship inside the interpreter, imported like any
+Seventeen modules written in Socrates ship inside the interpreter, imported like any
 module (`import std.json;`, aliased with `as`). Everything below is `pub`;
 these modules follow the same visibility rules as user code.
 
@@ -635,10 +635,16 @@ these modules follow the same visibility rules as user code.
 | `std.set` | `Set[T]` (v0.7), backed by `Map[T, Unit]`: structural membership, insertion-order iteration. `new()`, `from_list(xs)` (first occurrence wins); methods `insert(v) -> Bool` / `remove(v) -> Bool` (did anything change), `contains`, `len`, `is_empty`, `to_list`, and `union` / `intersect` / `difference` — each returns a **new** set ordered by the left operand's insertion order, then the right's |
 | `std.deque` | `Deque[T]` (v0.7), a double-ended queue with amortized O(1) ends (two-stack representation; a pop on an empty side reverses the other side across). `new()`, `from_list(xs)` (copies); methods `push_front` / `push_back`, `pop_front` / `pop_back` / `front` / `back` (all `Option[T]`), `len`, `is_empty`, `to_list` (front to back) |
 | `std.lazy` | `Lazy[T]` (v0.8): deferred, memoized computation. `of(thunk: fn() -> T) -> Lazy[T]` wraps a zero-argument thunk that doesn't run until needed; methods `get() -> T` (computes and caches on the first call, free on every later call — on any reference, since structs are references) and `is_forced() -> Bool`. For a module-level table that's expensive to build and not always needed — a plain top-level `let` already builds once at import (eagerly); `Lazy` defers that to first use. |
-| `std.glm` | Vector/matrix/quaternion math (v0.8), named and shaped after GLM: `Vec2`/`Vec3`/`Vec4` (constructors `vec2`/`vec3`/`vec4`; operator methods `add`/`sub`/`neg`; `mul(self, k: Float)`/`div(self, k: Float)` are **scalar** — the one `mul`/`div` slot a type gets (§ 5.1) goes to scaling, matching this spec's own worked example; `dot`, `length`, `length_sq`, `normalize`, `lerp`, and `cross` on `Vec3`); `Mat4` (column-major, `c0`..`c3`; constructors `mat4_identity`, `translation`, `scaling`, `rotation_x`/`y`/`z`, `rotation_axis` (Rodrigues', axis normalized internally), `perspective`/`ortho`/`look_at` (right-handed, OpenGL NDC z in `[-1, 1]`); methods `mul(self, o: Mat4)` (composition — chain as `proj.mul(view).mul(model)`), `mul_vec4(self, v: Vec4)` (the transform apply, named since `mul`'s operator slot is taken by composition), `transpose`); `Quat` (constructors `quat`, `quat_identity`, `from_axis_angle`; methods `mul` (composition), `conjugate`, `normalize`, `length`, `to_mat4`, `slerp` — computed via `atan2`/`sqrt` since `math` has no `acos`). Pure Socrates, no native code. |
+| `std.glm` | Vector/matrix/quaternion math (v0.8), named and shaped after GLM: `Vec2`/`Vec3`/`Vec4` (constructors `vec2`/`vec3`/`vec4`; operator methods `add`/`sub`/`neg`; `mul(self, k: Float)`/`div(self, k: Float)` are **scalar** — the one `mul`/`div` slot a type gets (§ 5.1) goes to scaling, matching this spec's own worked example; `dot`, `length`, `length_sq`, `normalize`, and `lerp` on `Vec2`/`Vec3`; `cross` and `to4(w)` (append a `w`) on `Vec3` only; `xyz()` (drop `w`) on `Vec4` only); `Mat4` (column-major, `c0`..`c3`; constructors `mat4_identity`, `translation`, `scaling`, `rotation_x`/`y`/`z`, `rotation_axis` (Rodrigues', axis normalized internally), `perspective`/`ortho`/`look_at` (right-handed, OpenGL NDC z in `[-1, 1]`); methods `mul(self, o: Mat4)` (composition — chain as `proj.mul(view).mul(model)`), `mul_vec4(self, v: Vec4)` (the transform apply, named since `mul`'s operator slot is taken by composition), `transpose`); `Quat` (constructors `quat`, `quat_identity`, `from_axis_angle`; methods `mul` (composition), `conjugate`, `normalize`, `length`, `to_mat4`, `slerp` — computed via `atan2`/`sqrt` since `math` has no `acos`). Pure Socrates, no native code. |
 | `std.fft` | FFT helpers (v0.8; moved from the native namespace in the minification pass): `magnitude(re, im)` (`sqrt(re[i]^2 + im[i]^2)` per bin, exactly as written — the panic on length mismatch matches the old native's message byte for byte), plus one-line `rfft`/`ifft` wrappers so an importing file keeps the `fft.` spellings (an imported module shadows the builtin namespace). `fft.fft` (complex pairs) is deliberately not re-exported — a module fn named `fft` would shadow the namespace in this module's own bodies; files that need it use the native namespace and skip this import. |
+| `std.wav` | RIFF/WAVE PCM audio over `Bytes` (v0.9): `encode(samples, sample_rate, channels) -> Bytes` (16-bit signed PCM; mono or stereo, stereo samples interleaved left/right). Panics on a channel count other than 1 or 2 (a caller contract violation, not a data-dependent failure). Generalizes what was previously a mono-only, demo-local writer in `demos/synthwave`. Encode only — no decoder, since nothing in the tree reads a WAV file back in as input. |
+| `std.svg` | A tiny SVG document builder (v0.9): `doc(width, height) -> Doc`; methods `rect`/`line`/`polyline`/`circle`/`text` append elements, `add(element)` is an escape hatch for anything else, `render() -> String` (non-consuming) assembles the standalone `<svg>` document; free function `num(v: Float) -> String` formats a coordinate (2 decimals, trailing `.0` dropped). Promoted unchanged from `demos/plot/svg.soc`, which had no plot-specific logic in it to begin with. |
+| `std.markdown` | A line-based Markdown-to-HTML converter (v0.9): `to_html(src) -> String` (headings, paragraphs, unordered lists, fenced code blocks; inline `**bold**`/`*italic*`/`` `code` ``/`[text](url)`, everything else escaped literal text), `first_heading(src) -> Option[String]` (the first `# ` heading, for page titles), plus the lower-level `escape`/`render_inline`. Promoted unchanged from `demos/mdsite/markdown.soc`, which had no site-specific logic in it to begin with. |
+| `std.crc` | CRC-32 (v0.9; ISO 3309/ITU-T V.42, reflected, polynomial `0xEDB88320`, table-driven) and Adler-32 (RFC 1950): `crc32(data: Bytes) -> Int`, `adler32(data: Bytes) -> Int`. Promoted unchanged from `demos/png/crc.soc`. |
+| `std.zlib` | An RFC 1950 stream wrapping raw bytes in an RFC 1951 **stored** (uncompressed) deflate block (v0.9): `wrap(raw, block_size) -> Bytes`, `unwrap(z) -> Result[Unwrapped, String]` (`Unwrapped { data, blocks, adler_ok }`). Named `wrap`/`unwrap`, not `deflate`/`inflate`: those verbs imply real LZ77/Huffman compression, which never happens here — every byte in comes out unchanged, just framed as a valid stream. Not a general zlib/deflate codec (no Huffman-coded blocks, ever) — promoted unchanged in behavior from `demos/png/zlib.soc`'s `deflate_stored`/`inflate_stored`, renamed for accuracy. |
+| `std.png` | The PNG container format (v0.9): `signature() -> Bytes`, `chunk(name, data) -> Bytes`, `encode(w, h, pixels, block_size) -> Bytes` (8-bit RGB, filter 0, `std.zlib`-stored IDAT — no compression), `parse(file) -> Result[Parsed, String]` (re-verifies every checksum). Promoted from `demos/png/png.soc`, unchanged except `encode` taking `block_size` as an explicit parameter instead of a hardcoded module constant (the constant was a demo-specific choice, not a std-level default). |
 
-### 7.2 The gpu namespace (v0.7, experimental, feature-gated)
+### 7.2 The gpu namespace (v0.7; native backends added v0.8, feature-gated)
 
 The `gpu` namespace dispatches compute shaders. It has five backends,
 all **native and zero-dependency** (since v0.8): **Metal** (MSL kernels;
@@ -655,11 +661,14 @@ Linux/Windows; no CUDA toolkit involved, the driver JITs the PTX), and
 **Direct3D 12** (HLSL kernels via `gpu.run`, compiled at dispatch time
 by the OS's own `d3dcompiler_47.dll`; COM-vtable FFI over runtime-loaded
 system DLLs, behind the `d3d12` feature on Windows — where WARP, the
-OS's software adapter, guarantees a device on every machine). Where
-several are compiled in, the precedence is vulkan > d3d12 > cuda >
-opencl (the CI-proven universal path first, then the always-has-a-device
-Windows path, then the vendor GPU path, then OpenCL, which commonly
-resolves to a CPU implementation). The original **wgpu** path (WGSL
+OS's software adapter, guarantees a device on every machine). Metal's
+platform gate (Apple Silicon macOS only) never overlaps with the other
+four's (Linux/Windows only), so metal is simply the active backend
+whenever it's compiled in. Among vulkan/d3d12/cuda/opencl, where several
+are compiled in, the precedence is vulkan > d3d12 > cuda > opencl (the
+CI-proven universal path first, then the always-has-a-device Windows
+path, then the vendor GPU path, then OpenCL, which commonly resolves to
+a CPU implementation). The original **wgpu** path (WGSL
 shaders behind a `gpu` cargo feature — v0.7's one quarantined
 dependency) was **removed in v0.8** when this native coverage landed,
 per `PROJECT.md`'s roadmap: every build of Socrates is now zero-dependency
@@ -674,7 +683,7 @@ gracefully as described below.
 | `gpu.adapter_info()` | `fn() -> String` | `"<name> (<backend>)"`, `"no adapter"`, or `"gpu support not compiled in"`. Never empty |
 | `gpu.run(src, input, out_len, wx, wy, wz)` | `fn(String, Bytes, Int, Int, Int, Int) -> Result[Bytes, String]` | one compute dispatch of source-text `src` — MSL on the metal backend, PTX on the cuda backend, HLSL on the d3d12 backend (the ABIs below). The binary backends (vulkan, opencl) `Err` redirecting to `gpu.run_spirv`. Without a backend: `Err("gpu support not compiled in (build with --features metal on Apple Silicon macOS, --features d3d12 on Windows, or --features vulkan, cuda, or opencl on Linux/Windows)")` |
 | `gpu.run_spirv(spirv, input, out_len, wx, wy, wz)` | `fn(Bytes, Bytes, Int, Int, Int, Int) -> Result[Bytes, String]` | (v0.8) `gpu.run`'s `Bytes`-shader sibling — SPIR-V is a binary format, so the blob rides the buffer type (a sibling, not an overload: Socrates has neither default parameters nor overloading). Ingested natively by the vulkan and opencl backends — each in its own SPIR-V *profile* (the two ABI paragraphs below; the blobs are not interchangeable); other backends `Err` naming the entry point they want |
-| `gpu.backend()` | `fn() -> String` | (v0.8) `"metal"`, `"vulkan"`, `"d3d12"`, `"cuda"`, `"opencl"`, or `"none"` — which implementation the `gpu` namespace dispatches to in this build (vulkan > d3d12 > cuda > opencl). The `gpu` analog of `win.backend_name()`: branch on it to pick the kernel dialect and entry point — and, for `gpu.run_spirv`, the SPIR-V profile |
+| `gpu.backend()` | `fn() -> String` | (v0.8) `"metal"`, `"vulkan"`, `"d3d12"`, `"cuda"`, `"opencl"`, or `"none"` — which implementation the `gpu` namespace dispatches to in this build (metal, when compiled in, is always active; among the rest, vulkan > d3d12 > cuda > opencl — see the precedence note above). The `gpu` analog of `win.backend_name()`: branch on it to pick the kernel dialect and entry point — and, for `gpu.run_spirv`, the SPIR-V profile |
 
 Every failure is an `Err` value, never a panic: bad arguments, no adapter,
 shader compile/validation errors (their messages pass through), device loss.
@@ -1264,9 +1273,14 @@ OS/GPU resource: a `Window` that is garbage-collected without an explicit
 `close()` runs, so a program that opens and discards many windows in a loop
 actually reclaims them as it goes.
 
-`key_down(String) -> Bool` (is the named key currently held down; names are
-X11 keysym names — lowercase letters like `"w"`, `"a"`; an unrecognized name
-returns `false` rather than erroring), `mouse_pos() -> (Float, Float)` (last
+`key_down(String) -> Bool` (is the named key currently held down; the common
+single-character and named-key spellings — lowercase letters like `"w"`,
+`"a"`, plus names like `"space"`/`"escape"`/arrow keys — work the same on
+every backend, but the underlying name space is backend-specific: X11 keysym
+names on Linux, a small hand-written table on Windows, and
+`NSEvent.charactersIgnoringModifiers` text on macOS — see the per-backend
+notes above (§ 7.3); an unrecognized name returns `false` rather than
+erroring), `mouse_pos() -> (Float, Float)` (last
 known pointer position within the window, updated by `poll()`; `(0.0, 0.0)`
 before the first pointer motion), `width() -> Int` / `height() -> Int`
 (current window size in pixels, updated by `poll()` on a resize),

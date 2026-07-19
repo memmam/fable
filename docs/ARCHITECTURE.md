@@ -526,7 +526,7 @@ untouched, leaving the original mismatch as a normal failure. `error:`/
 
 **`gfx`** is a backend-neutral OpenGL 3.3 core-profile draw-call namespace
 built on top of `window`'s per-platform `GlFns` function-pointer table
-(each of `x11/gl.rs`/`win32.rs`/`macos/gl.rs` already carries the full shader/
+(each of `x11/gl.rs`/`win32/gl.rs`/`macos/gl.rs` already carries the full shader/
 program/buffer/VAO/texture/uniform/draw-call table, resolved at `Window`
 creation time). Two design choices make this a thin layer rather than a
 new subsystem:
@@ -1034,6 +1034,101 @@ scenes — sub-threshold edges, thin lines, rings, noise fields,
 degenerate 1×1/8×1 resolutions — rendered by both implementations at
 both presets, 94 pixel-exact comparisons). 184 new cross-checks, all
 max_diff=0 on first run.
+
+## v0.9 additions (in progress)
+
+**`std.wav`** is a pure-Socrates module (no Rust beyond `stdlib.rs`'s
+embedded-module table gaining `std.wav`, the same one-line pattern
+`std.lazy` followed) generalizing what used to be `demos/synthwave`'s
+own hand-rolled, mono-only RIFF/WAVE writer: `encode` takes an explicit
+channel count (mono or stereo, interleaved samples for stereo, matching
+`pyl.nd`'s own convention) instead of hardcoding one. Encode only —
+deliberately no `decode`: nothing in the tree reads a WAV file back in
+as input, and per the "std grows reluctantly" rule (`demos/NOTES.md`),
+a decoder with no real consumer is speculative surface, not a minimal
+implementation. `stdlib.rs` also gained a real bug fix while this list
+was being edited: `std.fft` had been wired into `std_module` (the
+resolver) but never into `std_module_names` (the completion/
+error-message list) since the wave that added it — `import std.fft;`
+always worked, but a typo'd `std.` import's "did you mean" list
+silently never offered it. Both `std.wav` and the `std.fft` fix landed
+in the same edit, since fixing the second required touching the exact
+function the first one's addition touches anyway.
+
+`demos/synthwave/wav.soc`'s `encode` is now a one-line wrapper over
+`std.wav.encode(samples, sample_rate, 1)` — the demo's own field-reader
+helpers (`tag_at`/`u16_at`/`u32_at`/`i16_at`) stay, since they're the
+demo's own byte-offset verification tool for `checks.soc`'s golden
+output, independent of whoever produced the bytes; the golden output is
+byte-identical to before the delegation. `ports/pyl/audio.soc` gained
+`write_wav` over `std.wav`, so the port's own claim that "the Socrates
+side can also emit WAV directly" is backed by a real, tested code path
+rather than an aspirational parenthetical: samples clamp to `[-1, 1]`
+and quantize by `round(x * 32767)`, matching
+`ports/claudewave/tools/paw2wav.py`'s existing convention for
+listening to a PAW file. Verified the same way `checks.soc` verifies
+`demos/synthwave`'s encoder — direct header/sample byte reads, no
+decoder needed (`ports/pyl/spec.soc`). PAW remains the actual
+parity-comparison format between the two implementations; WAV is for
+listening.
+
+**`std.svg`, `std.markdown`, `std.crc`, `std.zlib`, `std.png`** apply
+the same std.wav lesson across the rest of the demo zoo: any demo
+that was, at its core, a from-scratch encoder of a real, generically
+reusable file format had that encoder promoted to `std`, split into
+whatever pieces make each piece independently reusable, while the
+demo's own domain logic (chart layout, site templating, plasma
+rendering) stays put. All five moved with the demo's own goldens
+verified byte-identical before and after.
+
+- `std.svg` (from `demos/plot/svg.soc`) and `std.markdown` (from
+  `demos/mdsite/markdown.soc`) moved **unchanged** — both were already
+  fully generic, with zero plot- or site-specific code in them, so the
+  promotion is a pure relocation. `plot/chart.soc`/`checks.soc`/
+  `main.soc` and `mdsite/site.soc`/`main.soc`/`spec.soc` just import
+  `std.svg`/`std.markdown` in place of the old file-relative import.
+- `std.crc` (CRC-32 + Adler-32) moved unchanged from `demos/png/crc.soc`
+  — a second, independent consumer of a general-purpose checksum pair,
+  not `std.png`-specific.
+- `std.zlib` moved from `demos/png/zlib.soc`, with one deliberate
+  rename: `deflate_stored`/`inflate_stored` became `wrap`/`unwrap`
+  (`Inflated` became `Unwrapped`) because `deflate`/`inflate` imply
+  real LZ77/Huffman compression, and none ever happens here — every
+  byte in comes out unchanged, just framed as a valid RFC 1950/1951
+  stream via the *stored*-block trapdoor. The demo's own decode-side
+  consumer (its round-trip and corruption-drill golden tests, `STYLE.md`
+  §3) is what justifies keeping `unwrap` at all — unlike `std.wav`,
+  this isn't speculative surface.
+- `std.png` moved from `demos/png/png.soc`, unchanged except `encode`
+  gaining an explicit `block_size` parameter: the demo's own module
+  constant (`2000`, chosen specifically to force its 4640-byte test
+  image through the multi-block path) was a demo-specific test choice,
+  not a sensible std-level default, so it became a caller-supplied
+  argument instead — `demos/png/main.soc`/`spec.soc` now pass `2000`
+  explicitly at their call sites, preserving byte-identical output.
+- `demos/png/bits.soc` lost its `push_u32be`/`read_u32be`/`read_u16le`
+  wrappers — each was a literal one-line pass-through to the v0.7
+  `Bytes` natives already, so `std.zlib`/`std.png` call the natives
+  directly instead of re-wrapping them; `bits.soc` now holds only the
+  demo's own hex-formatting presentation helpers (`to_hex`/`dump`),
+  which stay local for the same reason `std.wav`'s field-reader helpers
+  did — single consumer, presentation only, not format logic.
+- Every promoted module's error/panic message text is byte-identical
+  to what the demo had (no added module-name prefixes), specifically to
+  avoid re-pinning goldens that weren't part of the actual ask; the one
+  exception is `zlib.wrap`'s block-size-range panic, unavoidably
+  renamed from `deflate_stored:` since that function name no longer
+  exists, and unpinned by any golden test.
+- `demos/mdsite/content/about.md` describes the demo's own module
+  layout to a site visitor and named `markdown.soc` explicitly — now
+  corrected to name `std.markdown`, which changed `about.html`'s byte
+  count and cascaded into `main.soc`'s pinned build-report numbers and
+  the committed `out/about.html` artifact, all re-pinned/regenerated
+  together.
+- Removing 5 files from the demo tree dropped the golden demo-test
+  count from 73 to 68 (each print-free `.soc` module counted as its own
+  silently-passing test per `docs/SPEC.md` § 10) — updated everywhere
+  `tools/check_counts.sh` tracks it.
 
 ## Testing strategy
 

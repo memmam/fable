@@ -31,7 +31,10 @@ math namespace minified to what only it provides, a native `List.sum()`
 (bench_lists −55..−59% on every release architecture, `lists.sum` now
 its one-line wrapper), four VM superinstructions fused from a dynamic
 pair profile of 2.5 billion dispatches (dispatch-heavy rows −4..−12%
-across the matrix), and a consistency
+across the matrix, with one accepted residual — aarch64-macos's
+`for_range` costs ~4%, the one target where finer-grained fusion measured
+worse, not better; `bench/RESULTS.md`'s H3 section has the full
+accounting), and a consistency
 sweep that makes every claim in the tree (SPEC, ports, bench harness,
 core docs, demo style) match what CI actually enforces.
 
@@ -72,7 +75,7 @@ Highlights of v0.8 over v0.7 (full list in
   and `socrates test --bless`.
 
 Everything observable is pinned: 313 golden spec tests, 135 executed book
-snippets, and 73 demo golden tests, the whole suite green under
+snippets, and 68 demo golden tests, the whole suite green under
 `SOCRATES_GC_STRESS=1` — and the graphics backends are pinned with real
 pixels, in CI, on plain runners (lavapipe for Vulkan, Xvfb for GL, macOS
 runners for Metal, WARP for D3D12 compute).

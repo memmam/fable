@@ -239,8 +239,9 @@ println(ages.len());
 
 One wrinkle: the empty map is spelled `{:}`, not `{}`, because `{}`
 already means an empty block — `let m: Map[String, Int] = {};` is a type
-error (`expected Map[String, Int], found Unit`). And since `{:}` has no
-entries to infer types from, it needs an annotation or other context:
+error (`error[E0301]: \`{}\` is an empty block, not an empty map`, with a
+note pointing at `{:}`). And since `{:}` has no entries to infer types
+from, it needs an annotation or other context:
 
 ```soc errors
 let tally = {:};
@@ -328,6 +329,11 @@ None
 The one exclusion: values containing functions can't be keys (there is no
 sensible equality for closures). The compiler rejects it when the key type
 is written out, and the runtime panics if one sneaks in through a generic.
+
+One behavioral caveat, not an exclusion: map keys are hashed at insertion,
+so mutating a list, map, or struct after using it as a key strands the
+entry — it still counts toward `len()` and appears in `keys()`, but no
+lookup can reach it. Don't mutate values used as keys.
 
 ## Ranges
 

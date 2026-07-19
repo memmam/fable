@@ -82,6 +82,31 @@ evidence trail behind each.
   class had been codified without running step (iv), which left other
   negative-results entries unexamined; step (iv), run late, found two
   whose stated premise (the dispatch codegen lottery) H1 had since killed.
+- **The `std.wav` decode-trim (2026-07-19).** Roxy's question — is
+  `std.wav` minified as much as possible, "the whole point is that these
+  need to be minimum implementations" — caught a `decode()` whose only
+  caller was its own round-trip test. Cutting it (and the mirrored
+  `pyl.audio.read_wav`) is the first instance of "`std` surface is earned,
+  never speculative" as a project-wide principle, not just a demos-local
+  one. The immediate follow-up directive — promote any demo that's
+  strictly a file generator into `std`, splitting for atomic reusability —
+  produced the six-module wave (`std.wav`/`svg`/`markdown`/`crc`/`zlib`/
+  `png`) the same session, verified byte-identical against every existing
+  golden across all five affected demos.
+- **The `deflate_stored`/`inflate_stored` → `wrap`/`unwrap` rename
+  (2026-07-19).** During the same promotion wave, Roxy's naming
+  constraint — "if it's not LITERALLY DEFLATE, rename it to what it
+  ACTUALLY is" — caught that `demos/png/zlib.soc`'s functions only ever
+  emit RFC 1951's uncompressed *stored* block type, never real
+  LZ77/Huffman compression, so the `deflate`/`inflate` names overclaimed.
+  Renamed to `wrap`/`unwrap` (and `Inflated` to `Unwrapped`), rationale
+  recorded in the module's own header comment — the first instance of "a
+  name is a claim" as a project-wide principle. No forward instance
+  exists yet (nothing has been deliberately changed out from under an
+  existing name since) — the forward half of the rule (rename before
+  drifting further, and give spec-correctness-dependent callers their
+  own real implementation rather than an evolving name) is preventive,
+  recorded ahead of its first occasion on purpose.
 
 ## Native graphics & compute rollout timeline
 
@@ -177,6 +202,26 @@ directives; each of the following is the incident that produced one.
   | `bench/CLAUDE.md` | `@RESULTS.md` |
   | `demos/CLAUDE.md` | `@NOTES.md` / `@STYLE.md` |
   | `ports/CLAUDE.md` | `@README.md` / `@pyl/CONTRACT.md` / `@icaa/README.md` / `@claudewave/README.md` |
+- **The codification-routing gap (2026-07-19).** Roxy's directive to
+  codify anything from a session that needs codifying, and make sure
+  it's "distributed to the right files rather than just living in
+  CLAUDE.md," surfaced that this same session's own std-minimality and
+  naming-accuracy lessons had landed only in `CHANGELOG.md`/
+  `ARCHITECTURE.md`'s per-release prose — no engineering-principle
+  statement in `PROJECT.md`, no incident trail here. A real gap, not a
+  hypothetical one. Produced the "route by content, not by convenience"
+  rule; this entry is its own first instance, the rule that motivated
+  writing it down being the one now on record.
+- **The redundancy-cascade follow-up (2026-07-19).** Roxy's check
+  immediately after the entry above asked whether the routing rule went
+  far enough — whether facts, once routed to PROJECT.md/HISTORY.md,
+  then cascade correctly into CHANGELOG.md and the actual docs, with
+  redundancy replaced by fixed references except where a frozen copy is
+  the real requirement. It hadn't: only the first hop (session lesson →
+  which file) had been written down, not the second (established fact →
+  point, don't re-narrate). Produced "once a fact lives somewhere,
+  point to it," grounded in the Release ledger section's own existing
+  practice rather than a new invented example.
 
 ## Consistency and workflow incidents
 
@@ -193,3 +238,12 @@ directives; each of the following is the incident that produced one.
   "non-landing work is pushed for durability without a PR": a dropped
   probe or a held wave lives on its own pushed branch rather than being
   discarded or forced into a PR that was never going to merge.
+- **PR #115's silent scope creep (2026-07-19).** Its own description
+  said "Tiers 2-4 from the audit are being worked in a follow-up," then
+  Tier 2, Tier 3, and Tier 4 all landed as further commits on this same
+  PR instead — with nothing said about it anywhere but the commit log.
+  Roxy caught it mid-merge-attempt: the added commits had been left to
+  speak for themselves, and the description sat there actively wrong.
+  Produced "when a PR's scope expands past what its description
+  promised, say so in a comment" — the description is a claim like any
+  other, and claims go stale silently unless something corrects them.
