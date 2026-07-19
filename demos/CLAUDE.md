@@ -8,5 +8,5 @@ CLAUDE.md. See root CLAUDE.md's "Where the detailed memory lives"
 section for what each imported file is for.
 -->
 
-@../NOTES.md
-@../STYLE.md
+@NOTES.md
+@STYLE.md

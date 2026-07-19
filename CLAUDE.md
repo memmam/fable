@@ -332,18 +332,23 @@ numbers: `bench/RESULTS.md`.
   process/history belongs here in `CLAUDE.md` and the files above, never in
   the book).
 
-Each of the four directories above that carries its own detailed-memory
-file (`docs/`, `bench/`, `demos/`, `ports/`) also carries a nested
-`.claude/CLAUDE.md` stub that `@`-imports exactly the file(s) listed for
-it here — no content of its own, just wiring. Claude Code's nested-memory
-mechanism (`/memory`, and Desktop's context-tracker "Memory files" panel)
-only lists CLAUDE.md files it discovers, not `@`-imports (those stay
-inlined into whatever CLAUDE.md references them); a bare content file
-under a subdirectory never gets its own tracked-memory entry on its own.
-The stub is what gives `docs/SPEC.md` and friends a distinct entry
-there, lazily, the first time Claude reads a file in that subdirectory
-in a session — this list stays the single source of truth for what each
-file is *for*; the stub is purely mechanical.
+**Proposed, not yet decided (PR #107, 2026-07-19):** a nested
+per-directory `CLAUDE.md` stub (bare filename, e.g. `bench/CLAUDE.md` —
+nested `.claude/CLAUDE.md` is not a real discovery path; that's reserved
+for settings/skills/rules, confirmed against Claude Code's monorepo
+docs) for each of the four directories above, purely so Claude
+Desktop's context-tracker "Memory files" panel would list
+`docs/SPEC.md` and friends as their own entries. Open concern raised
+before merging: the `@`-import inside such a stub is not lazy about
+*content* — the instant any file in that subdirectory is read, the stub
+force-loads the *entire* imported file(s) into context, every session,
+for every contributor, indefinitely. That is a real, compounding token
+cost paid on every future touch of `docs/`, `bench/`, `demos/`, or
+`ports/`, against a cosmetic listing improvement in one UI panel — the
+underlying files were never actually hidden from Claude; this only
+changes what a tracker panel displays. Resolve this note (either strike
+it once merged with the tradeoff accepted, or replace it with a
+workaround-recording-triple entry if declined) once PR #107 lands.
 
 ## Release ledger (source material for release posts)
 

@@ -8,4 +8,4 @@ CLAUDE.md. See root CLAUDE.md's "Where the detailed memory lives"
 section for what RESULTS.md holds.
 -->
 
-@../RESULTS.md
+@RESULTS.md
