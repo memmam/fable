@@ -544,6 +544,18 @@ numbers: `bench/RESULTS.md`.
     against the actual repo/CI state (the Checks API here, but the
     general shape — go to the source of truth, don't wait on the
     signal layer to resolve itself) — not another wait cycle.
+  - **A wakeup firing is never a terminal, silent event.** Every
+    scheduled check-in resolves in exactly one of two states, in
+    order: (1) check whatever pending status it was armed for
+    directly, act on what's found, and — if work still remains —
+    schedule the next wakeup before the turn ends, so the loop never
+    dies silently between firings; (2) if nothing further is
+    automatable (a decision needs the user, or the work is genuinely
+    done), end the turn by saying so explicitly, never with just tool
+    calls and no wakeup and no closing status. Recorded instance
+    (2026-07-18): a check-in armed for in-flight bench-matrix samples
+    went quiet with the work unfinished and no follow-up wakeup armed
+    — the user had to notice the stall and ask.
 - The spec, the book's executable snippets, and the demos' pinned output are
   the three tripwires — if a change is wrong, one of them goes red.
 - **CHANGELOG, book, README, and ARCHITECTURE updates happen in-session,
