@@ -238,3 +238,12 @@ directives; each of the following is the incident that produced one.
   "non-landing work is pushed for durability without a PR": a dropped
   probe or a held wave lives on its own pushed branch rather than being
   discarded or forced into a PR that was never going to merge.
+- **PR #115's silent scope creep (2026-07-19).** Its own description
+  said "Tiers 2-4 from the audit are being worked in a follow-up," then
+  Tier 2, Tier 3, and Tier 4 all landed as further commits on this same
+  PR instead — with nothing said about it anywhere but the commit log.
+  Roxy caught it mid-merge-attempt: the added commits had been left to
+  speak for themselves, and the description sat there actively wrong.
+  Produced "when a PR's scope expands past what its description
+  promised, say so in a comment" — the description is a claim like any
+  other, and claims go stale silently unless something corrects them.

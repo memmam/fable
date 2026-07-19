@@ -132,6 +132,19 @@ numbers: `bench/RESULTS.md`.
   commits that touch no compiled source (docs, prose) ride the
   existing verdict without a re-run. Feature work happens on a
   dedicated branch off `main`.
+- **When a PR's scope expands past what its own description promised —
+  a "being worked in a follow-up" item gets folded into this PR
+  instead — post a PR comment saying so explicitly.** The description
+  is a claim, same as any other prose in the tree, and it goes stale
+  exactly the way any claim does: silently, if nothing corrects it. New
+  commits speak for what changed, never for what the description now
+  gets wrong about scope — a reader skimming the description alone
+  should not be misled about what's actually in the PR. Update the
+  description too when the stale line is a simple, one-line drift-fix
+  (e.g., "Tiers 2-4 are a follow-up" once they no longer are); the
+  comment is the part that doesn't get skipped, since it lands in the
+  PR's timeline where following eyes actually look, rather than
+  depending on someone re-reading a body that already looked settled.
 - Non-landing work is pushed for durability without a PR: a dropped
   probe or a held wave lives on its own pushed branch rather than being
   discarded or forced into a PR that was never going to merge. PRs are
