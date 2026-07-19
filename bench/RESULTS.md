@@ -165,6 +165,38 @@ cfg flips them to `#[inline(always)]` and folds the monolith back
 together. Non-aarch64-linux binaries are unchanged by the cfg
 machinery; aarch64-linux is judged on the matrix like everything else.
 
+(Revalidation note, 2026-07-19: re-verified at the current ≥5-sample
+floor via `bench/h1-binding-recheck` — a probe, never merges — whose
+build.rs forces `monolithic_dispatch` OFF on aarch64-linux only,
+judged against `bench/BASE` = main with the binding on. 5 valid
+samples across all four tier-1 architectures (commits 79df5da1,
+1507453c, adbe60e5, 726e172e, d5f25eae, in that order):
+
+| row              | aarch64-linux (head=OFF vs main=ON) | x86_64-linux | x86_64-windows | aarch64-macos |
+|------------------|--------------------------------------|--------------|----------------|---------------|
+| enum_match       | +5.4/+5.2/+5.3/+5.2/+4.9 (5/5 ⚠)     | +7.0/+3.7/-0.0/+0.3/-0.1 (2/5 ⚠, no consistent direction) | -0.0/+4.0/+0.6/+0.2/-0.9 (1/5 ⚠) | +0.4/+0.2/+0.2/+2.3/+0.2 (0/5 ⚠) |
+| closure_churn    | +4.1/+4.0/+4.0/+3.7/+3.7 (5/5 ⚠)     | flat (5/5)   | flat (5/5)     | flat (5/5)    |
+| bench_list_churn | +3.4/+3.3/+3.4/+3.1/+3.5 (5/5 ⚠)     | flat (one s1 mark, +5.0) | flat (one s5 mark, -3.2) | flat (5/5) |
+
+Forcing the compact loop back onto aarch64-linux reproduces, tight and
+in every one of 5 samples, the cost the binding exists to erase:
+enum_match +4.9..+5.4%, closure_churn +3.7..+4.1%, bench_list_churn
++3.1..+3.5% — a systematic Neoverse cost, not a placement roll,
+matching (and slightly exceeding) H1's original +4.5% reading. The
+other three architectures show no such pattern: at most one or two
+isolated single-sample marks apiece, on different rows each time, no
+row reproducing adversely across samples — ordinary per-job noise, not
+a `monolithic_dispatch` effect, since the probe's build.rs diff is
+inert on those targets (the emitted cfg is unchanged there).
+x86_64-linux's own scattered enum_match marks (2 of 5 samples,
+magnitude +3.7..+7.0%, no consistent direction) are the
+already-documented rodata lottery noted earlier in this section, not a
+new finding. Confirmed, unchanged: aarch64-linux still needs
+`monolithic_dispatch` on, exactly as built. This closes the reopening
+recorded under "The floor is uniform across every leg," below —
+`bench/h1-binding-recheck` never merges (probe only, no code change)
+and needs no further sampling.)
+
 **macOS measurement protocol.** macos-14 runners are precise but
 per-job biased: an A/A run (identical trees both sides; a
 Compare-binaries step proved the two independent builds bit-identical)
@@ -212,7 +244,7 @@ per-target binding built to erase it, which was verified clean on
 exactly *one* matrix sample. `bench/h1-binding-recheck` (never merges)
 re-measures the binding's own effect — forced off vs `bench/BASE` =
 main with the binding on — at 5 samples on aarch64-linux; see the
-per-target binding note above for the outcome once read.
+per-target binding note above — confirmed, unchanged.
 
 **The sixth probe: when 5 samples don't resolve, escalate the
 *kind* of evidence, not the count.** The floor exists to stop premature
@@ -234,6 +266,59 @@ fact: `bench/h3-probe-no-glc` (isolated the `get_local_const` fusion's
 own contribution rather than re-running the aggregate H3-vs-main A/B a
 4th and 5th time) was already this pattern before it had a name;
 `bench/h1-binding-recheck` (above) is the second, deliberate instance.
+
+**The hypothesis-test ladder — the sixth probe's deterministic-
+instrument branch, spelled out.** The bar to leave passive measurement
+for an active test: a finding reproducing across two probes. From
+there, the loop is hypothesis → test → verdict, not hypothesis → wider
+dig: a probe built to confirm or refute one specific, falsifiable
+prediction, not a fishing expedition. Two outcomes per test —
+*confirmed*: commit to the hypothesis and scope the idiom set *up* to
+cover the newly-understood case, per the universality principle above;
+*refuted*: form the next hypothesis and test that one specifically, not
+a wider unfocused dig. Bounded at four hypothesis-tests total — a fifth
+candidate with none confirmed is itself the signal to take the sixth
+probe's other branch (escalate to the user) rather than keep guessing.
+Keep a scratchpad of each test's data as it accumulates, not only at
+the end — not just *whether* to drop or promote a hypothesis early on
+partial data, but a slot-by-slot rule for what to spend each probe or
+sample on, at either scale (the ≤4-hypothesis ladder, or the ≥5-sample
+floor within one hypothesis):
+
+1. **Ground.** The first reading of whatever's currently under test. No
+   comparison exists yet.
+2. **Differential.** The second reading of the same target gives a
+   trend, but two points never confirm or reject anything on their own
+   — matches "fewer than 5 is inconclusive" above.
+3. **The first real choice, no early exit.** Reprobe/resample the
+   current target, or spend the slot on a different one (a different
+   hypothesis, a different kind of evidence) *only if* that different
+   target would yield more insight right now than another reading of
+   the current one. Don't default to resampling from inertia — weigh
+   the two options each time.
+4. **The same choice, but an early exit is now allowed.** If the
+   accreted evidence already compels a decision, decide here rather
+   than waiting for the last slot. Otherwise, the slot-3 choice applies
+   again — reprobe or switch, whichever yields more insight — and a
+   target abandoned at slot 3 is eligible for reconsideration here;
+   switching away from something once doesn't permanently disqualify
+   it from later slots.
+5. **The decisive slot.** Decide if the accreted evidence motivates
+   it — commit to the hypothesis (scope the idiom set *up*, uptake the
+   change) or change hypothesis entirely, based on what's accumulated.
+   Not yet motivated even here: the floor is a floor, not a ceiling —
+   the sixth probe above still governs (escalate the kind of evidence,
+   or the user), not a mechanical 6th reading.
+
+The same five-step logic governs the hypothesis ladder one slot
+shorter, since its own bound is 4, not 5: ground, differential, the
+slot-3 choice, then the decisive slot (commit-and-scope-up, or the next
+hypothesis) — there is no separate "early exit allowed" slot distinct
+from the decisive one at that scale. First instance:
+`bench/inline-upvals-x64-probe`, testing whether PR #103's x86_64-linux
+`for_range` residual is the representation choice itself vs. an
+incidental layout-shift artifact (see the per-target binding note
+above for the outcome once read).
 
 **aarch64-macos-15's first A/A** (identical binaries both sides, the
 audit-batch-1 run that introduced the leg): macros dead flat (checkers
@@ -431,14 +516,131 @@ probe whose only role was confirming *why* a shipped residual exists
 would spend CI time without being able to change anything now
 mergeable.)
 
+## Inline upvalues: a reopened negative result, KEPT with a two-target binding
+
+`Obj::Closure`'s upvalue storage (previously a bare `Vec<Handle>`,
+heap-allocated on every closure construction) becomes `UpvalStorage`: an
+inline-slots-or-spill enum, `InlineUpvals::Inline { len, slots:
+[Handle; 2] }` for closures capturing ≤2 upvalues (`bench/closure_churn`'s
+own shape and ordinary practice) or `InlineUpvals::Many(Vec<Handle>)`
+beyond that — same 24 bytes as the `Vec` it replaces, so `Obj` stays
+exactly 64 bytes. This reopens and reverses the "Inline ≤2 upvals wins
+its micro but loses the dispatch-loop codegen lottery" entry that used
+to stand in Negative results below, on the reflexive-codification
+audit's flag that H1 killed that lottery premise on Linux/Windows.
+
+**First four-arch matrix (`bench/inline-upvals`, base cf4f8630 onward, 5
+samples vs main) found two real per-target costs, not one.**
+`closure_churn` won big everywhere (−10% to −19%, tight and
+reproducible on every sample) except aarch64-linux, which instead
+showed a broad, tight regression across enum_match/for_range/
+bench_call_return/png (+3.2–5.2%, 4/4 marked every sample) — the same
+inlined-op-body-complexity sensitivity `monolithic_dispatch` already
+routes around on that target (`GetUpvalue`/`SetUpvalue`/`Closure` all
+inline into the Neoverse monolith there). Fixed the same way: aarch64-
+linux keeps plain `Vec<Handle>`, reusing `monolithic_dispatch` as the
+binding predicate (commit cf4f8630) since the mechanism is the same one
+that cfg already exists for.
+
+**That fix left a second residual: x86_64-linux's `for_range` marked
++2.8/+6.4/+6.2/+6.3/+9.1% across all 5 samples (4/5 over the 3% floor,
+the 5th same-direction but sub-floor) — despite `for_range` touching no
+closures or upvalues at all.** Per Roxy's direction for exactly this
+situation ("if you keep replicating the same finding, maybe that's the
+case where you should actually test it"), this was tested rather than
+assumed to be the project's known whole-program layout-shift ("rodata
+lottery") artifact class:
+
+- **Hypothesis:** the mark is a real cost of `InlineUpvals`'s
+  representation on x86_64-linux too (a different underlying reason
+  than aarch64-linux's, but possibly the same `Vec<Handle>` remedy) —
+  not an incidental layout artifact.
+- **Test:** `bench/inline-upvals-x64-probe` (never merges), branched
+  from `bench/inline-upvals`'s tip, forced `Vec<Handle>` on
+  x86_64-linux via a second, deliberately distinct predicate (an inline
+  `#[cfg(any(monolithic_dispatch, all(target_arch = "x86_64",
+  target_os = "linux")))]` for the probe), `bench/BASE` pinned to
+  `bench/inline-upvals`'s own tip for single-variable isolation.
+  Gathered the full ≥5-sample floor via the hypothesis-test ladder's
+  slot protocol (ground, differential, then reprobe-vs-switch each
+  slot after — see CLAUDE.md and the sixth-probe-doctrine paragraph
+  above): x86_64-linux `for_range` **−5.8% / −5.8% / −1.0% / −5.7% /
+  −6.0%**, direction 5/5 favorable (reverting to `Vec<Handle>` reverses
+  the regression every time), marked 4/5 — the mirror image of the
+  original discovery's own noise profile (magnitude-for-magnitude,
+  down to which single sample landed sub-floor). **CONFIRMED**: the
+  representation choice itself is the cause on x86_64-linux too, not a
+  layout-shift artifact.
+
+**Formalized as a second, distinctly-named build.rs cfg,
+`upvals_vec_handle`** — deliberately *not* folded into
+`monolithic_dispatch`, even though both targets land on the same
+`Vec<Handle>` form: `monolithic_dispatch` is specifically vm.rs's own
+dispatch-loop-arm-inlining binding (why aarch64-linux's compact loop
+flips to a monolith), a mechanism x86_64-linux does not share and
+should not silently inherit by reusing the cfg name (it would also flip
+vm.rs's own dispatch arms on x86_64-linux, an unrelated and untested
+change). aarch64-linux now rides both cfgs, each for its own reason;
+x86_64-linux rides only the new one; x86_64-windows and aarch64-macos
+keep `InlineUpvals`.
+
+**Fresh four-arch matrix on the formalized binding, 5 samples vs main
+(run 29671924853 onward), confirms flat-or-better on literally every
+row, every architecture:**
+
+`for_range` (the row that mattered):
+
+| arch | s1 | s2 | s3 | s4 | s5 |
+|------|---:|---:|---:|---:|---:|
+| x86_64-linux | −0.3% | −0.1% | +0.4% | −0.1% | +3.0% |
+| aarch64-linux | +0.4% | +0.0% | +0.1% | +0.0% | +0.1% |
+| x86_64-windows | +0.9% | +2.3% | +1.0% | +5.0% ⚠ | −0.7% |
+| aarch64-macos | −0.1% | −0.3% | −0.1% | −2.6% | −0.6% |
+
+x86_64-linux's original residual is gone (mixed sign, the one
+borderline +3.0% reading not even marked by ab.py's own threshold).
+aarch64-linux stays dead flat every sample (unaffected, as expected —
+its binding never changed). aarch64-macos stays flat and
+same-direction throughout. x86_64-windows marked once (sample 4,
++5.0%) with no consistent direction or magnitude across the other four
+readings (+0.9/+2.3/+1.0/−0.7) bracketing it on both sides — read as an
+isolated per-job excursion, not a new residual, by the same
+multi-sample standard this file already applies to macOS.
+
+`closure_churn` (the real win), both non-Linux targets, all 5 samples:
+
+| arch | s1 | s2 | s3 | s4 | s5 |
+|------|---:|---:|---:|---:|---:|
+| x86_64-windows | −16.2% | −16.2% | −16.5% | −18.7% | −17.1% |
+| aarch64-macos | −11.9% | −10.9% | −10.2% | −10.2% | −10.3% |
+
+Tight and reproducible on both targets, every sample. Every other
+single-sample mark across the 20 job-samples in this final matrix
+(bitwise_masks windows-s3, bench_deque linux-s4, string_build
+windows-s4, a cluster of macos-s5 macro rows) scattered across
+different rows each time with no row repeating in the same direction
+twice — the ordinary per-job noise signature this file already
+documents for shared runners, sub-10ms macros, and macos-14 (see the
+macOS measurement protocol above), not a systematic cost of the
+binding.
+
+**Verdict: KEEP.** Both the mechanism (inline-slots-or-spill upvalue
+storage) and the per-target binding (two Linux targets on
+`Vec<Handle>` via `upvals_vec_handle`, each for its own measured
+reason; x86_64-windows and aarch64-macos on `InlineUpvals`) are
+confirmed at the current ≥5-sample floor, on both the probe that
+isolated the hypothesis and the fresh matrix that verified the
+formalized binding. First instance of the hypothesis-test ladder
+(CLAUDE.md, under the ≥5-sample-floor bullet) reaching a CONFIRMED
+verdict end to end — see `bench/inline-upvals-x64-probe`'s commit
+history for the full slot-by-slot record.
+
 ## Negative results (measured, rejected — do not re-attempt without new evidence)
 
 - GC `next_gc` pacing `(live*2).max(4096)` is already the local optimum in
   both directions.
 - Boxing the FMap index loses to the extra pointer-chase on the map hot path.
 - Niche-packing `Obj` (dropping `#[repr(u8)]`) regresses match-heavy targets.
-- Inline ≤2 upvals wins its micro but loses the dispatch-loop codegen
-  lottery (+2.8% Ir elsewhere).
 - A fused compare-and-branch peephole: sound, but the same codegen lottery
   swamps the saved dispatch. **Re-examined post-H1/H3 (2026-07-18), per
   the reflexive-codification audit that flagged this entry's premise —

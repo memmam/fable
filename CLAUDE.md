@@ -121,6 +121,21 @@ their place fastest.
   predate this floor live in `bench/RESULTS.md` — this is the one
   other file that states the number, per the intent-tracking
   principle's scope-recording discipline.
+  **The deterministic-instrument branch is itself a ladder, not one
+  shot:** hypothesis → a test built to confirm or refute it
+  specifically → confirmed (commit, scope the idiom set up) or refuted
+  (the next hypothesis, tested the same way) — bounded at four
+  hypothesis-tests before a fifth candidate with none confirmed is
+  itself the signal to take the other branch (escalate to the user).
+  A running scratchpad of each test's data feeds a slot-by-slot rule
+  (ground, differential, then a real reprobe-vs-switch choice each slot
+  after) for what to spend each probe or sample on — letting a
+  hypothesis be dropped *or* promoted early, on partial data — but only
+  for navigating between hypotheses faster, never for the underlying
+  KEEP/DROP verdict itself, which still needs its own full ≥5 once a
+  hypothesis is confirmed. First instance: `bench/inline-upvals-x64-probe`
+  (PR #103's x86_64-linux `for_range` residual). Full protocol, spelled
+  out slot by slot, in `bench/RESULTS.md`.
 - **This applies to whole backend implementations, not just algorithmic
   idioms** — but the trigger is the *platform* actually dropping the older
   path, not merely deprecating it. When a newer backend for the same
@@ -332,6 +347,42 @@ numbers: `bench/RESULTS.md`.
   process/history belongs here in `CLAUDE.md` and the files above, never in
   the book).
 
+**Decided (PR #107, 2026-07-19):** each of the four directories above
+also gets a nested per-directory `CLAUDE.local.md` stub (bare filename
+— nested `.claude/CLAUDE.md` is not a real discovery path; that's
+reserved for settings/skills/rules, confirmed against Claude Code's
+monorepo docs) that does nothing but `@`-import the file(s) already
+listed for it above. Purely so Claude Desktop's context-tracker "Memory
+files" panel lists `docs/SPEC.md` and friends as their own entries,
+lazily, the first time a session reads a file in that subdirectory. The
+`@`-import is not lazy about *content* — the stub force-loads the
+entire imported file(s) the moment it fires — so this is
+`CLAUDE.local.md`, not `CLAUDE.md`: per `.gitignore`'s `CLAUDE.local.md`
+rule, gitignored and never committed, so the eager-load cost and the
+files themselves stay opt-in per checkout, never imposed on every clone
+or contributor.
+
+Consequence, and the reason this is spelled out exactly rather than by
+example: these stubs don't propagate through git — a fresh clone,
+container, or model swap won't have them. Reconstructing them from a
+one-example-plus-inference description is exactly the kind of drift
+this file exists to prevent (see "record decisions with their scope"
+above), so the four files are byte-exact here, not summarized. Each
+stub's content is only the `@` line(s) below; the wrapping HTML-comment
+explaining *why* (visible with the Read tool, stripped from context
+otherwise — see "Block-level HTML comments" in Claude Code's memory
+docs) is optional decoration, not load-bearing, and can be omitted or
+reworded freely on reconstruction:
+
+| File | Content |
+| --- | --- |
+| `docs/CLAUDE.local.md` | `@SPEC.md` / `@ARCHITECTURE.md` / `@RELEASING-macOS.md` |
+| `bench/CLAUDE.local.md` | `@RESULTS.md` |
+| `demos/CLAUDE.local.md` | `@NOTES.md` / `@STYLE.md` |
+| `ports/CLAUDE.local.md` | `@README.md` / `@pyl/CONTRACT.md` / `@icaa/README.md` / `@claudewave/README.md` |
+
+(Each `/`-separated entry is its own line in the file, in that order.)
+
 ## Release ledger (source material for release posts)
 
 - **v0.1** — the language: lexer, parser, unification inference with
@@ -529,7 +580,17 @@ numbers: `bench/RESULTS.md`.
   - Decision forks go to the user as plain-text lettered options, not
     interactive question UI.
   - Long CI waits are handled by scheduled self check-ins, never
-    polling loops.
+    polling loops — that's this session's own wakeup mechanism, not
+    available to a delegated subagent. A subagent briefed to push,
+    wait on a bench/CI run, and continue has no independent wakeup of
+    its own: told to just "wait," it ends its turn and stalls, needing
+    a manual resume every single time (the PR #103 x86_64-linux
+    investigation's agent did this twice in a row). The fix for that
+    case is the mirror image of this rule, not an exception to it: a
+    subagent waiting on a run polls *within its own turn*, a bounded
+    bash loop (`sleep` + a status check, capped at enough iterations to
+    cover one run), and only ends its turn once it has an actual result
+    or has exhausted the cap — never on a bare "standing by."
   - **A signal is a prompt to check, not a substitute for checking.**
     A task-notification, webhook event, or elapsed check-in interval
     means "go verify the actual state now" — not "the state is
@@ -556,6 +617,22 @@ numbers: `bench/RESULTS.md`.
     (2026-07-18): a check-in armed for in-flight bench-matrix samples
     went quiet with the work unfinished and no follow-up wakeup armed
     — the user had to notice the stall and ask.
+  - **Anything structural or behavioral about how memory itself is
+    configured** — CLAUDE.md/CLAUDE.local.md conventions, what gets
+    committed vs. gitignored, nested-stub patterns and their exact
+    content — lands here, byte-exact, the same session it's decided,
+    same as any other rule on this list. This is that rule applied to
+    itself: Claude Code's own auto-memory ("memories folder",
+    `~/.claude/projects/<project>/memory/`) is explicitly machine-local
+    and does not survive a fresh container or a different session's
+    checkout, and a scratchpad session ledger is even more ephemeral
+    (gone the moment its container is reclaimed) — either one is a
+    *reconstruction* source, not a durable one, and reconstructing from
+    a partial or ambiguous description (one example generalized by
+    inference, say) is where drift creeps in between sessions or across
+    a model swap. PR #107's nested-`CLAUDE.local.md` saga (three rounds
+    of correction in one session before the mechanism and its exact
+    file contents were spelled out here) is the recorded instance.
 - The spec, the book's executable snippets, and the demos' pinned output are
   the three tripwires — if a change is wrong, one of them goes red.
 - **CHANGELOG, book, README, and ARCHITECTURE updates happen in-session,
