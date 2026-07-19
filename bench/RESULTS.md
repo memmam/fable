@@ -463,14 +463,131 @@ probe whose only role was confirming *why* a shipped residual exists
 would spend CI time without being able to change anything now
 mergeable.)
 
+## Inline upvalues: a reopened negative result, KEPT with a two-target binding
+
+`Obj::Closure`'s upvalue storage (previously a bare `Vec<Handle>`,
+heap-allocated on every closure construction) becomes `UpvalStorage`: an
+inline-slots-or-spill enum, `InlineUpvals::Inline { len, slots:
+[Handle; 2] }` for closures capturing ≤2 upvalues (`bench/closure_churn`'s
+own shape and ordinary practice) or `InlineUpvals::Many(Vec<Handle>)`
+beyond that — same 24 bytes as the `Vec` it replaces, so `Obj` stays
+exactly 64 bytes. This reopens and reverses the "Inline ≤2 upvals wins
+its micro but loses the dispatch-loop codegen lottery" entry that used
+to stand in Negative results below, on the reflexive-codification
+audit's flag that H1 killed that lottery premise on Linux/Windows.
+
+**First four-arch matrix (`bench/inline-upvals`, base cf4f8630 onward, 5
+samples vs main) found two real per-target costs, not one.**
+`closure_churn` won big everywhere (−10% to −19%, tight and
+reproducible on every sample) except aarch64-linux, which instead
+showed a broad, tight regression across enum_match/for_range/
+bench_call_return/png (+3.2–5.2%, 4/4 marked every sample) — the same
+inlined-op-body-complexity sensitivity `monolithic_dispatch` already
+routes around on that target (`GetUpvalue`/`SetUpvalue`/`Closure` all
+inline into the Neoverse monolith there). Fixed the same way: aarch64-
+linux keeps plain `Vec<Handle>`, reusing `monolithic_dispatch` as the
+binding predicate (commit cf4f8630) since the mechanism is the same one
+that cfg already exists for.
+
+**That fix left a second residual: x86_64-linux's `for_range` marked
++2.8/+6.4/+6.2/+6.3/+9.1% across all 5 samples (4/5 over the 3% floor,
+the 5th same-direction but sub-floor) — despite `for_range` touching no
+closures or upvalues at all.** Per Roxy's direction for exactly this
+situation ("if you keep replicating the same finding, maybe that's the
+case where you should actually test it"), this was tested rather than
+assumed to be the project's known whole-program layout-shift ("rodata
+lottery") artifact class:
+
+- **Hypothesis:** the mark is a real cost of `InlineUpvals`'s
+  representation on x86_64-linux too (a different underlying reason
+  than aarch64-linux's, but possibly the same `Vec<Handle>` remedy) —
+  not an incidental layout artifact.
+- **Test:** `bench/inline-upvals-x64-probe` (never merges), branched
+  from `bench/inline-upvals`'s tip, forced `Vec<Handle>` on
+  x86_64-linux via a second, deliberately distinct predicate (an inline
+  `#[cfg(any(monolithic_dispatch, all(target_arch = "x86_64",
+  target_os = "linux")))]` for the probe), `bench/BASE` pinned to
+  `bench/inline-upvals`'s own tip for single-variable isolation.
+  Gathered the full ≥5-sample floor via the hypothesis-test ladder's
+  slot protocol (ground, differential, then reprobe-vs-switch each
+  slot after — see CLAUDE.md and the sixth-probe-doctrine paragraph
+  above): x86_64-linux `for_range` **−5.8% / −5.8% / −1.0% / −5.7% /
+  −6.0%**, direction 5/5 favorable (reverting to `Vec<Handle>` reverses
+  the regression every time), marked 4/5 — the mirror image of the
+  original discovery's own noise profile (magnitude-for-magnitude,
+  down to which single sample landed sub-floor). **CONFIRMED**: the
+  representation choice itself is the cause on x86_64-linux too, not a
+  layout-shift artifact.
+
+**Formalized as a second, distinctly-named build.rs cfg,
+`upvals_vec_handle`** — deliberately *not* folded into
+`monolithic_dispatch`, even though both targets land on the same
+`Vec<Handle>` form: `monolithic_dispatch` is specifically vm.rs's own
+dispatch-loop-arm-inlining binding (why aarch64-linux's compact loop
+flips to a monolith), a mechanism x86_64-linux does not share and
+should not silently inherit by reusing the cfg name (it would also flip
+vm.rs's own dispatch arms on x86_64-linux, an unrelated and untested
+change). aarch64-linux now rides both cfgs, each for its own reason;
+x86_64-linux rides only the new one; x86_64-windows and aarch64-macos
+keep `InlineUpvals`.
+
+**Fresh four-arch matrix on the formalized binding, 5 samples vs main
+(run 29671924853 onward), confirms flat-or-better on literally every
+row, every architecture:**
+
+`for_range` (the row that mattered):
+
+| arch | s1 | s2 | s3 | s4 | s5 |
+|------|---:|---:|---:|---:|---:|
+| x86_64-linux | −0.3% | −0.1% | +0.4% | −0.1% | +3.0% |
+| aarch64-linux | +0.4% | +0.0% | +0.1% | +0.0% | +0.1% |
+| x86_64-windows | +0.9% | +2.3% | +1.0% | +5.0% ⚠ | −0.7% |
+| aarch64-macos | −0.1% | −0.3% | −0.1% | −2.6% | −0.6% |
+
+x86_64-linux's original residual is gone (mixed sign, the one
+borderline +3.0% reading not even marked by ab.py's own threshold).
+aarch64-linux stays dead flat every sample (unaffected, as expected —
+its binding never changed). aarch64-macos stays flat and
+same-direction throughout. x86_64-windows marked once (sample 4,
++5.0%) with no consistent direction or magnitude across the other four
+readings (+0.9/+2.3/+1.0/−0.7) bracketing it on both sides — read as an
+isolated per-job excursion, not a new residual, by the same
+multi-sample standard this file already applies to macOS.
+
+`closure_churn` (the real win), both non-Linux targets, all 5 samples:
+
+| arch | s1 | s2 | s3 | s4 | s5 |
+|------|---:|---:|---:|---:|---:|
+| x86_64-windows | −16.2% | −16.2% | −16.5% | −18.7% | −17.1% |
+| aarch64-macos | −11.9% | −10.9% | −10.2% | −10.2% | −10.3% |
+
+Tight and reproducible on both targets, every sample. Every other
+single-sample mark across the 20 job-samples in this final matrix
+(bitwise_masks windows-s3, bench_deque linux-s4, string_build
+windows-s4, a cluster of macos-s5 macro rows) scattered across
+different rows each time with no row repeating in the same direction
+twice — the ordinary per-job noise signature this file already
+documents for shared runners, sub-10ms macros, and macos-14 (see the
+macOS measurement protocol above), not a systematic cost of the
+binding.
+
+**Verdict: KEEP.** Both the mechanism (inline-slots-or-spill upvalue
+storage) and the per-target binding (two Linux targets on
+`Vec<Handle>` via `upvals_vec_handle`, each for its own measured
+reason; x86_64-windows and aarch64-macos on `InlineUpvals`) are
+confirmed at the current ≥5-sample floor, on both the probe that
+isolated the hypothesis and the fresh matrix that verified the
+formalized binding. First instance of the hypothesis-test ladder
+(CLAUDE.md, under the ≥5-sample-floor bullet) reaching a CONFIRMED
+verdict end to end — see `bench/inline-upvals-x64-probe`'s commit
+history for the full slot-by-slot record.
+
 ## Negative results (measured, rejected — do not re-attempt without new evidence)
 
 - GC `next_gc` pacing `(live*2).max(4096)` is already the local optimum in
   both directions.
 - Boxing the FMap index loses to the extra pointer-chase on the map hot path.
 - Niche-packing `Obj` (dropping `#[repr(u8)]`) regresses match-heavy targets.
-- Inline ≤2 upvals wins its micro but loses the dispatch-loop codegen
-  lottery (+2.8% Ir elsewhere).
 - A fused compare-and-branch peephole: sound, but the same codegen lottery
   swamps the saved dispatch. **Re-examined post-H1/H3 (2026-07-18), per
   the reflexive-codification audit that flagged this entry's premise —

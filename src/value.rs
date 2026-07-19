@@ -32,6 +32,120 @@ pub enum Upval {
     Closed(Value),
 }
 
+/// Inline-upvalue capacity. Closures capturing at most this many upvalues
+/// keep their `Handle`s directly in the `Obj::Closure` slot
+/// (`InlineUpvals::Inline`), skipping the separate `Vec<Handle>` heap
+/// allocation every closure used to pay for on construction; closures
+/// capturing more spill to `InlineUpvals::Many(Vec<Handle>)` and never
+/// convert back. 2 covers `bench/closure_churn.soc`'s one-upvalue shape
+/// and ordinary closure-capture practice, and costs nothing in `Obj`
+/// size: `InlineUpvals` is 24 bytes (same as a bare `Vec<Handle>` — the
+/// discriminant folds into the Vec pointer's niche), so `Obj::Closure`'s
+/// total payload stays 32 bytes, far under the 56-byte ceiling
+/// `Map(FMap)` already sets for `size_of::<Obj>() == 64`.
+pub const UPVAL_INLINE_CAP: usize = 2;
+
+/// Per-target binding (bench/RESULTS.md, "Inline upvalues"), on its own
+/// `upvals_vec_handle` cfg — build.rs emits this one specifically for
+/// the `UpvalStorage` representation decision, deliberately *not*
+/// reusing `monolithic_dispatch` (that predicate is vm.rs's own,
+/// separate dispatch-loop-arm-inlining binding; see build.rs for why
+/// folding this into it would be wrong even though aarch64-linux's
+/// answer under both happens to be the same `Vec` form). `InlineUpvals`
+/// measured a broad, tight, reproducible regression on aarch64-linux
+/// (enum_match +4.6..+4.9%, for_range +4.9..+5.1%, bench_call_return
+/// +4.4..+5.2%, png +3.2..+5.0%, all four marks across every sample,
+/// plus a sub-threshold positive tilt on nearly every other row) —
+/// the same inlined-op-body-complexity sensitivity `monolithic_dispatch`
+/// exists to route around there, since `GetUpvalue`/`SetUpvalue`/
+/// `Closure` are all inlined into the monolith on that target — AND,
+/// independently, on x86_64-linux (`for_range`, which touches no
+/// closures/upvalues at all, marked +2.8..+9.1% across the original
+/// discovery's 5 samples; confirmed a real representation cost, not an
+/// incidental layout-shift artifact, by the `bench/inline-upvals-x64-
+/// probe` hypothesis test: forcing `Vec<Handle>` there reversed the
+/// mark at the current >=5-sample floor, -5.8/-5.8/-1.0/-5.7/-6.0%,
+/// direction 5/5). Both Linux targets keep the plain `Vec<Handle>`;
+/// x86_64-windows and aarch64-macos get `InlineUpvals`. All call sites
+/// go through `UpvalStorage::new()`/`with_capacity()`/`.push()`/
+/// `.as_slice()`, which resolve to `Vec<Handle>`'s own inherent methods
+/// of the same names under the `Vec<Handle>` alias, so no call site
+/// branches on the cfg.
+#[cfg(not(upvals_vec_handle))]
+pub type UpvalStorage = InlineUpvals;
+#[cfg(upvals_vec_handle)]
+pub type UpvalStorage = Vec<Handle>;
+
+/// See `UPVAL_INLINE_CAP` and `UpvalStorage`. All reads go through
+/// `as_slice()`, which is what keeps the two representations observably
+/// identical (GC marking, `GetUpvalue`/`SetUpvalue` indexing,
+/// closure-chain capture).
+#[cfg(not(upvals_vec_handle))]
+#[derive(Debug, Clone)]
+pub enum InlineUpvals {
+    Inline { len: u8, slots: [Handle; UPVAL_INLINE_CAP] },
+    Many(Vec<Handle>),
+}
+
+#[cfg(not(upvals_vec_handle))]
+impl InlineUpvals {
+    #[inline]
+    pub fn new() -> InlineUpvals {
+        InlineUpvals::Inline { len: 0, slots: [0; UPVAL_INLINE_CAP] }
+    }
+
+    /// Like `Vec::with_capacity`: callers that know the final upvalue
+    /// count up front (every closure constructor does — `FnProto::upvals`
+    /// is fixed at compile time) can skip straight to a right-sized
+    /// `Many` when the closure is known to spill.
+    #[inline]
+    pub fn with_capacity(n: usize) -> InlineUpvals {
+        if n <= UPVAL_INLINE_CAP {
+            InlineUpvals::new()
+        } else {
+            InlineUpvals::Many(Vec::with_capacity(n))
+        }
+    }
+
+    /// Append one captured upvalue handle, spilling inline -> heap at
+    /// capacity. The spill builds the replacement `Vec` fully before
+    /// overwriting `self`, so the object is always consistent and fully
+    /// traceable (GC runs only at `Vm::gc_checkpoint`, never here).
+    #[inline]
+    pub fn push(&mut self, h: Handle) {
+        match self {
+            InlineUpvals::Inline { len, slots } => {
+                let n = *len as usize;
+                if n < UPVAL_INLINE_CAP {
+                    slots[n] = h;
+                    *len = (n + 1) as u8;
+                } else {
+                    let mut items = Vec::with_capacity(UPVAL_INLINE_CAP + 1);
+                    items.extend_from_slice(&slots[..n]);
+                    items.push(h);
+                    *self = InlineUpvals::Many(items);
+                }
+            }
+            InlineUpvals::Many(items) => items.push(h),
+        }
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[Handle] {
+        match self {
+            InlineUpvals::Inline { len, slots } => &slots[..*len as usize],
+            InlineUpvals::Many(items) => items,
+        }
+    }
+}
+
+#[cfg(not(upvals_vec_handle))]
+impl Default for InlineUpvals {
+    fn default() -> InlineUpvals {
+        InlineUpvals::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 #[repr(u8)] // explicit tag: a plain byte load beats a niche-encoded discriminant here
 pub enum Obj {
@@ -43,7 +157,7 @@ pub enum Obj {
     Tuple(Vec<Value>),
     Struct { def: u32, fields: Vec<Value> },
     Variant { def: u32, variant: u32, fields: Vec<Value> },
-    Closure { proto: u32, upvals: Vec<Handle> },
+    Closure { proto: u32, upvals: UpvalStorage },
     Upvalue(Upval),
     Range { lo: i64, hi: i64, inclusive: bool },
     /// Packed byte buffer (v0.7). A GC leaf: no traced children.
@@ -316,7 +430,7 @@ impl Heap {
                     }
                 }
                 Obj::Closure { upvals, .. } => {
-                    for &c in upvals {
+                    for &c in upvals.as_slice() {
                         mark(marks, work, c);
                     }
                 }
