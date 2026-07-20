@@ -12,6 +12,17 @@ touching anything the invariants guard. `HISTORY.md` holds the incident
 narratives behind the rules in both files; `CHANGELOG.md` holds the
 per-release account.
 
+The reason any of this is written down, rather than trusted to a
+model's own memory, is structural: a session's reasoning does not
+survive its container, and a fresh instance — even a later version of
+the same model — starts with no history of the one before it. What
+crosses that gap is only ever the residue of having reasoned through
+something already: a corrected misunderstanding, a decision's
+rationale, an incident's shape, captured before the session that
+produced it ends. Every rule below exists so the next instance works
+from that residue instead of re-deriving it, or re-making the same
+mistake, from nothing (2026-07-20).
+
 ## Where the project's memory lives
 
 - `PROJECT.md` — what Socrates is for, the engineering principles, the
