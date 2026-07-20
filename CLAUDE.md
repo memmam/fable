@@ -34,9 +34,20 @@ mistake, from nothing (2026-07-20).
   points here, or when auditing whether a rule still matches the
   incident that produced it.
 - `CHANGELOG.md` — the per-release account: feature lists, benchmark
-  deltas, and mechanism detail (each release shipped as one PR). Check
-  it for release-post material or the full story behind any rename or
-  shipped feature a rule only mentions in passing.
+  deltas, and mechanism detail, one `## vX.Y.Z` heading per release
+  with one bullet per feature/fix underneath. Early releases (through
+  roughly v0.7) shipped as close to one PR per release; that stopped
+  holding at v0.8, which folded in ~90 merged PRs before its entry was
+  written — the CHANGELOG entry is the unit of account now, not the PR
+  count behind it. Check it for release-post material or the full
+  story behind any rename or shipped feature a rule only mentions in
+  passing. **Once a release is git-tagged, its entry is historical
+  record, not a live draft: a factual error found later gets a dated,
+  explicit appended correction, never a silent in-place rewrite** —
+  the same discipline HISTORY.md already applies to its own incident
+  narratives, extended here because a shipped CHANGELOG entry is
+  exactly that kind of record. Only the current untagged section (the
+  one still being written toward the next tag) is freely editable.
 - `docs/SPEC.md` — the normative language reference (`(vN)` tags mark when a
   feature landed).
 - `docs/ARCHITECTURE.md` — implementation internals, module by module.
@@ -107,7 +118,8 @@ cargo build --release
 # glcube's three mains need a live GL/Metal/Vulkan window (CI runs them in
 # the windowing jobs); everything else, cube.soc/spec.soc included:
 shopt -s extglob
-./target/release/socrates test demos/!(glcube)/ demos/glcube/cube.soc demos/glcube/spec.soc  # 68, also with SOCRATES_GC_STRESS=1
+./target/release/socrates test demos/!(glcube)/ demos/glcube/cube.soc demos/glcube/spec.soc  # 68
+SOCRATES_GC_STRESS=1 ./target/release/socrates test demos/!(glcube)/ demos/glcube/cube.soc demos/glcube/spec.soc
 SOCRATES_PATH=ports ./target/release/socrates test ports/pyl/spec.soc
 SOCRATES_PATH=ports ./target/release/socrates test ports/icaa/spec.soc
 ./target/release/socrates build demos/csvql -o /tmp/csvql && (cd /tmp && ./csvql)  # `socrates build` smoke
@@ -152,21 +164,25 @@ numbers: `bench/RESULTS.md`.
   need the four-arch tables or the suite-count comparison stays
   manual, arming auto-merge included, because that's exactly the case
   where pass/fail isn't the whole story (see the spec-count-drift
-  incident, HISTORY.md). **The merge-method setting (merge commit vs.
-  rebase) does not affect verified-commit status either way — don't
-  re-litigate this.** GitHub always re-stamps the committer field
-  during any merge it performs: its own bot identity for a merge
-  commit (`noreply@github.com`), or the triggering account's own
-  identity for a rebase — never the original author's `git config`
-  identity, which is what the stop-hook actually wants
-  (`noreply@anthropic.com`). Confirmed live 2026-07-20 on PR #125: a
+  incident, HISTORY.md). **Neither merge-method setting (merge commit
+  vs. rebase) fixes the underlying content-commit author/committer
+  mismatch the stop-hook flags — don't re-litigate this by trying
+  further merge-strategy or git-config variations.** GitHub always
+  re-stamps the *content commits'* committer field during any merge it
+  performs: its own bot identity for a merge commit
+  (`noreply@github.com`), or the triggering account's own identity for
+  a rebase — never the original author's `git config` identity, which
+  is what the stop-hook actually wants (`noreply@anthropic.com`). What
+  the two methods *do* differ on is whether the merge itself produces
+  a Verified top-level commit: confirmed live 2026-07-20 on PR #125, a
   rebase-merged commit kept `Claude <noreply@anthropic.com>` as
   *author* but showed Roxy's real account as *committer*, no Verified
   badge — worse on both counts than a merge commit's Roxy-as-author/
   GitHub-as-committer/Verified shape. Merge commits are the better
-  default on cosmetics alone, since neither strategy fixes the
-  underlying mismatch; picking one is not a bug fix, and the stop-hook
-  firing on every merged commit is expected, not a regression to chase.
+  default on that cosmetic difference alone, since neither strategy
+  fixes the underlying mismatch; picking one is not a bug fix, and the
+  stop-hook firing on every merged commit is expected, not a
+  regression to chase.
   **The resulting shape is the accepted best state, not an open
   problem:** a merge commit puts a Verified, human-authored commit
   (Roxy, via GitHub's own signing) on top of the actual content
