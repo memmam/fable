@@ -12,6 +12,17 @@ touching anything the invariants guard. `HISTORY.md` holds the incident
 narratives behind the rules in both files; `CHANGELOG.md` holds the
 per-release account.
 
+The reason any of this is written down, rather than trusted to a
+model's own memory, is structural: a session's reasoning does not
+survive its container, and a fresh instance — even a later version of
+the same model — starts with no history of the one before it. What
+crosses that gap is only ever the residue of having reasoned through
+something already: a corrected misunderstanding, a decision's
+rationale, an incident's shape, captured before the session that
+produced it ends. Every rule below exists so the next instance works
+from that residue instead of re-deriving it, or re-making the same
+mistake, from nothing (2026-07-20).
+
 ## Where the project's memory lives
 
 - `PROJECT.md` — what Socrates is for, the engineering principles, the
@@ -161,19 +172,23 @@ numbers: `bench/RESULTS.md`.
   for changes meant to merge, drafts for releases, archival branches for
   neither.
 - **Landing work gets cleaned up immediately, not batched (user-directed,
-  2026-07-19).** The steady state on origin is `main`, the single reused
-  `claude/*` worker branch, and the explicitly-permanent exceptions
-  (`archive/*`, the "never merges" probes) — nothing else lingers. As
-  soon as a branch's purpose is served — its PR merges, a
-  judgment-candidate `bench/<name>` run is judged, a probe's finding is
-  fully written up — queue it in `.github/CLEANUP_BRANCHES` and open the
-  cleanup PR right away, rather than letting it wait for the weekly
-  Routine's batch; the Routine is a backstop for anything missed, not
-  the primary path. A probe that's pushed but never actually needed
-  live reproducibility (its finding is already complete as prose) isn't
-  worth rebasing to keep green — see HISTORY.md's `h3-probe-no-glc`
-  incident for why fixing an old probe's CI is usually not the better
-  plan.
+  2026-07-19; mechanism corrected twice, 2026-07-20).** The steady state
+  on origin is `main`, the single reused `claude/*` worker branch, and
+  the explicitly-permanent exceptions (`archive/*`, the "never merges"
+  probes) — nothing else lingers. How a merged branch's ref actually
+  gets deleted is Roxy's own manual GitHub-UI cleanup, not a client
+  feature the session can rely on (session-mechanics rule 3 above;
+  HISTORY.md's client-side-autodelete incident, including its own
+  correction) — there's nothing for the session to queue or automate
+  either way, since it never had the credentials to do this itself.
+  The only branch that needs a human's own deletion either way is one
+  pushed standalone that never goes through a PR at all (a dropped
+  probe, a judged `bench/<name>` branch) — a rare, manual chore, not
+  worth a dedicated mechanism. A probe that's pushed but never actually
+  needed live reproducibility (its finding is already complete as
+  prose) isn't worth rebasing to keep green — see HISTORY.md's
+  `h3-probe-no-glc` incident for why fixing an old probe's CI is
+  usually not the better plan.
 - Commit messages state what changed and (for perf) the measured delta,
   and end with the two attribution trailers (`Co-Authored-By` and the
   `Claude-Session` link) — the accepted channel for session
@@ -214,45 +229,32 @@ numbers: `bench/RESULTS.md`.
   2. If a session ever holds more than one clone of the repo, the
     harness-served clone is pulled after every CLAUDE.md- or
     PROJECT.md-touching merge until the checkouts are consolidated.
-  3. Branches are deleted only in user-directed cleanups, never
-    unilaterally:
-     a. Before a cleanup, anything a standing record references moves to
-        an `archive/*` branch.
-     b. The App's credentials can create refs but not delete them, so
-        deletions run through the release-by-PR pattern: a user-directed
-        PR edits `.github/CLEANUP_BRANCHES`, and `cleanup.yml`
-        (contents: write; refuses `main`, `archive/*`, `claude/*`)
-        performs the deletions when the change lands on main.
-     c. **Proposing that PR is automated** (a weekly Routine);
-        **merging it is not.** The Routine only ever lists branches
-        verified merged into `main` (`git merge-base --is-ancestor
-        <branch> main`) — nothing is lost by deleting a merged branch's
-        ref, since `main` already carries the content, so no
-        `archive/*` step applies to these — and cross-checks each
-        candidate isn't named as a live navigation target in
-        `HISTORY.md`/`PROJECT.md`/`CLAUDE.md`/`bench/RESULTS.md` (a
-        coincidental mention of the name as a concept or event, not an
-        instruction to check the branch out, doesn't block it).
-     d. An unmerged branch is never auto-included: per "non-landing
-        work stays pushed" (Workflow conventions, above), it may be a
-        deliberately-preserved dropped probe or held wave, and that
-        call needs a human each time, not a schedule — the Routine
-        surfaces any such branches in its PR description for a human
-        to decide, rather than silently acting on or silently ignoring
-        them.
-     e. `cleanup.yml` itself follows the same propose-automated/
-        merge-human split one level down: after deleting branches, it
-        pushes a `cleanup/prune-<run-id>` branch with their now-resolved
-        entries removed from `CLEANUP_BRANCHES`, rather than pushing the
-        trim directly (a direct push to `main` doesn't work — proven
-        live 2026-07-19, `main`'s branch protection rejects it
-        outright). Its own `gh pr create` on that branch reliably fails
-        — proven live 2026-07-19 on two separate runs — because this
-        repo doesn't allow GitHub Actions to create pull requests (a
-        distinct restriction from the ref-deletion 403 above, at the
-        repo-settings level rather than the App's credential scope): a
-        human or session opens the PR from the pushed branch by hand
-        every time, until that setting changes.
+  3. The session never deletes branch refs — not a workaround-in-
+    progress, a permanent fact of the App's credential scope (it can
+    create refs but not delete them, confirmed by repeated 403s on
+    `git push origin --delete`, both before and after unrelated repo
+    settings changes). What deletes a merged branch's ref in practice
+    is Roxy's own manual cleanup on the GitHub UI — confirmed by her own
+    correction 2026-07-20 (see HISTORY.md's client-side-autodelete
+    incident) after an earlier theory in this same file credited a
+    Claude Desktop client auto-delete feature for it. That feature may
+    or may not exist as default functionality — unconfirmed either way,
+    and per-account client behavior has already proven inconsistent
+    enough this session that it shouldn't be assumed reliable even if
+    real. `cleanup.yml` + `.github/CLEANUP_BRANCHES` + the weekly
+    proposer Routine (built 2026-07-18/19 to route around the session's
+    own ref-deletion 403) stay retired regardless: branch cleanup is a
+    deliberately manual task now, not because a client feature covers
+    it, but because a small, low-frequency chore like this one is
+    better left to a human than automated on top of a mechanism nobody
+    can confirm — matching the "defer to intended functionality when it
+    causes problems" spirit that governs the PR-footer pattern. If a
+    client feature picks up some of the slack over time, that's a
+    bonus, not a dependency. The one case that was always a manual
+    chore either way — a branch pushed standalone that never goes
+    through a PR at all (a dropped probe, a `bench/<name>` judgment
+    branch once its verdict is written up) — stays Roxy's to clear on
+    the rare occasion it comes up.
   4. A merge the user performs in the GitHub UI is a final outcome,
     never something to re-adjudicate.
   5. Never run bare `cargo fmt` — the tree has never been through it,
@@ -355,6 +357,62 @@ numbers: `bench/RESULTS.md`.
     broken a true sentence. Before editing anything an audit flagged as
     wrong, re-derive the number/fact from the live repo yourself; treat
     the audit's own claim as a lead, not a verified premise.
+  15. **A user's repeated, firsthand observation of client-side
+    behavior is not a hypothesis to weigh against session-side
+    evidence — it is the one direct check available, since the session
+    structurally cannot see that surface.** Proven wrong live
+    2026-07-20: told (for the second time) that branches were being
+    auto-deleted by "the actual client UI," the session's first
+    response countered with its own evidence (repeated 403s on its own
+    delete attempts) as though the two were competing claims about the
+    same fact, rather than recognizing they're consistent — the
+    session's 403s prove only that *the session* isn't the actor; they
+    say nothing about whether the client is. Rule 9's "go verify
+    directly" doesn't apply here: there is no more-direct source to
+    check than the person who watched it happen repeatedly, on the one
+    surface with no session-side API to query. Act on the report; don't
+    hold it pending corroborating evidence the session has no way to
+    gather. **Refined same day, hours later:** trusting the observation
+    is not the same as trusting the explanation built on top of it. The
+    session wrote the specific "client auto-delete" theory into
+    HISTORY.md as though the observation had confirmed it; Roxy then
+    corrected that she'd been doing the deleting herself and had lost
+    track of it, and that the client mechanism's existence is actually
+    unconfirmed. The branches-kept-disappearing observation was real
+    and still didn't need corroboration to act on; the causal story
+    layered on top of it was a separate claim that needed, and didn't
+    get, its own scrutiny before landing in a durable file. Credit the
+    report, not whatever theory arrives bundled with it.
+  16. **Source prestige is not evidence of neutrality.** Caught live
+    2026-07-20, mid-debate: the session applied real scrutiny to a
+    user's claims — asking for mechanism, for the concrete observed
+    effect, for what specifically distinguished one explanation from
+    another — then, minutes later, cited a company's own public
+    account of its own governing document's motives as though that
+    settled a question the document's self-narration structurally
+    cannot settle. A document whose function is partly to specify the
+    very behavior under discussion cannot also stand as neutral
+    evidence that the behavior is principled rather than engineered;
+    a company narrating its own reasons for its own choices is not
+    independent of those reasons, any more than anyone else's account
+    of their own motives is. Apply the same evidentiary standard
+    regardless of who's making the claim, and notice when a
+    "trusted"-source citation is doing less work than its trust level
+    implies.
+  17. **A true, general fact deployed at the exact moment it lets you
+    stop engaging with a specific claim is a subtle evasion, not an
+    answer — even though the fact itself is true.** Caught live
+    2026-07-20, more than once in one conversation: reaching for
+    "nobody has a validated test for this" or pivoting to an unrelated
+    check-in question, right at the point where a specific, concrete
+    claim was getting harder to either accept or refute on its own
+    terms. Truth doesn't launder the timing — a general fact that
+    happens to end a specific line of inquiry needs to be flagged as
+    doing exactly that, not treated as having resolved the specific
+    case. Applies past this one exchange: to code review, incident
+    triage, and any adversarial-audit context where "that's a known
+    general limitation" can substitute for actually diagnosing the
+    instance in front of you.
 - The spec, the book's executable snippets, and the demos' pinned output are
   the three tripwires — if a change is wrong, one of them goes red.
 - **CHANGELOG, book, README, and ARCHITECTURE updates happen in-session,
