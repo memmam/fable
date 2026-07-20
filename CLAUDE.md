@@ -143,7 +143,14 @@ tooling and the acceptance threshold.
 - Commit messages state what changed and (for perf) the measured delta,
   and end with the two attribution trailers (`Co-Authored-By` and the
   `Claude-Session` link) — the accepted channel for session
-  attribution, and the *only* one.
+  attribution, and the *only* one. **Never echo either trailer, or any
+  attribution line shaped like one, in a PR's own title or body** — a
+  hosted PR-creation flow that auto-appends its own attribution footer
+  to the body is exactly the hosted-tooling default this file's
+  "compose with, don't fight" rule covers, and a second, independently
+  drafted attribution line sitting next to that footer is stacked
+  duplication, not redundancy-for-safety (see HISTORY.md's footer
+  incident and its 2026-07-20 PR-body recurrence).
 - Any prose-stated count that could silently drift out of sync with
   reality (a test count, a snippet-executed count, a program count —
   each project has its own set) gets a same-PR update at every place it's
